@@ -78,6 +78,69 @@ describe('extractElementInfo', () => {
     expect(info.padding).toBeNull();
   });
 
+  it('captures layout, border and timing details only when they are meaningful', () => {
+    document.body.innerHTML = '<div></div>';
+    const info = extractElementInfo(
+      document.querySelector('div')!,
+      deps(
+        {
+          display: 'flex',
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          borderWidth: '1px',
+          borderStyle: 'solid',
+          borderColor: 'rgb(35, 35, 43)',
+          transition: 'background-color 180ms ease 0s',
+          animation: 'pulse 2s infinite',
+          lineHeight: '1.4',
+        },
+        rect(100, 40),
+      ),
+      () => 'fixed',
+    );
+
+    expect(info.flexDirection).toBe('row');
+    expect(info.alignItems).toBe('center');
+    expect(info.justifyContent).toBe('space-between');
+    expect(info.gap).toBe('12px');
+    expect(info.gridTemplateColumns).toBeNull();
+    expect(info.borderColor).toBe('rgb(35, 35, 43)');
+    expect(info.transition).toBe('background-color 180ms ease 0s');
+    expect(info.animation).toBe('pulse 2s infinite');
+    expect(info.lineHeight).toBe('1.4');
+  });
+
+  it('omits default layout, border and zero-duration timing values', () => {
+    document.body.innerHTML = '<div></div>';
+    const info = extractElementInfo(
+      document.querySelector('div')!,
+      deps(
+        {
+          display: 'block',
+          flexDirection: 'row',
+          borderWidth: '0px',
+          borderStyle: 'none',
+          borderColor: 'currentcolor',
+          transition: 'all 0s ease 0s',
+          animation: 'none 0s ease 0s 1 normal none running',
+        },
+        rect(100, 40),
+      ),
+      () => 'fixed',
+    );
+
+    expect(info.flexDirection).toBeNull();
+    expect(info.gap).toBeNull();
+    expect(info.borderWidth).toBeNull();
+    expect(info.borderStyle).toBeNull();
+    expect(info.borderColor).toBeNull();
+    expect(info.transition).toBeNull();
+    expect(info.animation).toBeNull();
+  });
+
   it('caps the class list so stylesheets cannot bloat the message', () => {
     document.body.innerHTML = `<div class="${Array.from({ length: 40 }, (_, i) => `c${i}`).join(' ')}"></div>`;
     const info = extractElementInfo(

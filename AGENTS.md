@@ -1,13 +1,13 @@
 # PixelPeek
 
-MV3 browser extension for inspecting any webpage's computed design values. Phase 1 only: side panel + element picker.
+MV3 browser extension for inspecting any webpage's computed design values. Phase 1.5: side panel, element picker, responsive workspace, and deterministic Agent Prompts.
 
 ## Build and verification
 
 - `npm run check` is the full gate: strict `tsc --noEmit` → `vitest run` → production build.
 - `npm run build` is **three separate Vite configs in order** (`vite.config.ts` → `vite.content.config.ts` → `vite.background.config.ts`). Vite 8 rejects array configs; do not merge them.
 - `dist/` is the unpacked extension. Load that directory in `chrome://extensions` → Developer mode → Load unpacked. Rebuild and click "reload" on the extension card after any source change.
-- `npm test` runs Vitest in jsdom. `npm run test:watch` for focused work.
+- `npm test` runs Vitest in jsdom (`.test.ts` and `.test.tsx`). `npm run test:watch` for focused work.
 - `npm run icons` regenerates the three PNGs in `public/icons/`; they are produced by `scripts/generate-icons.mjs`, not hand-authored.
 
 ## Architecture constraints
@@ -18,10 +18,12 @@ MV3 browser extension for inspecting any webpage's computed design values. Phase
 - The overlay is one Shadow DOM host appended to `document.documentElement`, with `pointer-events: none` and `all: initial`. Never inject styles into the page or mutate the target element; host-page CSS will otherwise break the highlight.
 - `src/content/inspect.ts` and `src/content/css.ts` are pure and receive their dependencies injected. Keep DOM reads inside `inspect.ts` and keep CSS values allowlisted/sanitized in `css.ts` — the Copy CSS feature must never emit `url()`, `;`, braces, or form values.
 - Clicking an element in the picker captures it and ends inspection immediately (Escape also ends it), so normal page interaction is restored. Background also ends inspection on tab activation, URL change, and tab removal.
+- `src/panel/hooks/usePanelWidth.ts` owns the responsive breakpoints (compact <380px, regular <480px, wide otherwise). Panel surfaces must not reintroduce fixed wide sidebars or `px-7` padding; keep `min-w-0` through the flex/grid chain and use `break-anywhere` for long CSS values.
+- `src/panel/prompts/` is UI-free and deterministic: `model.ts` converts detected `ElementInfo` into facts and omissions, `templates.ts` renders the ten-section prompt for the three output modes. Never fabricate missing properties or mix inferred guidance into detected values.
 
 ## Environment gotchas
 
-- The Git repository root is `/mnt/c/USERS/tabiq` (the home directory), not this folder, and it contains unrelated staged files. Do not commit from the project directory without first deciding which repo owns this work; the Phase 1 checkpoint uses a project-local repository.
+- The authoritative Git repository for this project is this folder; the parent `/mnt/c/USERS/tabiq` is an unrelated repository with staged files. Never commit from the parent.
 - `activeTab` is granted by the toolbar click that opens the side panel. Starting inspection without that gesture can fail injection on pages where no host permission exists; report the error instead of requesting broad host permissions.
 - `http(s)` pages only: `chrome://`, `chrome-extension://`, `about:`, `file://` and `data:` are rejected before injection.
 - Browser behavior has not been verified in Chrome. Manual testing in a real browser is required before claiming compatibility.

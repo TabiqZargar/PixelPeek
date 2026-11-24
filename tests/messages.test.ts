@@ -39,6 +39,12 @@ describe('runtime guards', () => {
     expect(isElementInfo({ ...element, outerHTML: '<html>...' })).toBe(true);
   });
 
+  it('accepts new optional detection fields and rejects malformed ones', () => {
+    expect(isElementInfo({ ...element, transition: 'opacity 200ms', animation: null })).toBe(true);
+    expect(isElementInfo({ ...element, transition: 200 })).toBe(false);
+    expect(isElementInfo({ ...element, flexDirection: false })).toBe(false);
+  });
+
   it('discriminates panel events by type and payload', () => {
     expect(isPanelEvent({ type: MessageType.ElementSelected, payload: element })).toBe(true);
     expect(isPanelEvent({ type: MessageType.ElementSelected, payload: { tag: 'div' } })).toBe(false);

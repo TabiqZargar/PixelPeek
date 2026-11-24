@@ -19,6 +19,22 @@ export interface ElementInfo {
   boxShadow: string | null;
   display: string | null;
   position: string | null;
+  lineHeight?: string | null;
+  letterSpacing?: string | null;
+  textAlign?: string | null;
+  textTransform?: string | null;
+  opacity?: string | null;
+  overflow?: string | null;
+  gap?: string | null;
+  flexDirection?: string | null;
+  alignItems?: string | null;
+  justifyContent?: string | null;
+  gridTemplateColumns?: string | null;
+  borderWidth?: string | null;
+  borderStyle?: string | null;
+  borderColor?: string | null;
+  transition?: string | null;
+  animation?: string | null;
   capturedAt: string;
   sourceUrl: string;
 }

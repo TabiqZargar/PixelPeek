@@ -10,7 +10,8 @@ export type IconName =
   | 'copy'
   | 'check'
   | 'square'
-  | 'cursor';
+  | 'cursor'
+  | 'sparkles';
 
 type Props = SVGProps<SVGSVGElement> & { name: IconName; size?: number };
 
@@ -59,6 +60,12 @@ const paths: Record<IconName, ReactNode> = {
   check: <path d="m5 12.5 4.5 4.5L19 7" />,
   square: <rect x="6" y="6" width="12" height="12" rx="1.5" />,
   cursor: <path d="m5 3 13 8-6 1.5L9.5 19 5 3Z" />,
+  sparkles: (
+    <>
+      <path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7L12 3Z" />
+      <path d="m18.5 15 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z" />
+    </>
+  ),
 };
 
 export function Icon({ name, size = 16, ...rest }: Props) {

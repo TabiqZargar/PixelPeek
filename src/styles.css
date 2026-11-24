@@ -55,3 +55,7 @@ button {
 button:disabled {
   cursor: not-allowed;
 }
+
+.break-anywhere {
+  overflow-wrap: anywhere;
+}

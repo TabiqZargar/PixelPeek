@@ -76,9 +76,27 @@ export function isElementInfo(value: unknown): value is ElementInfo {
     'boxShadow',
     'display',
     'position',
+    'lineHeight',
+    'letterSpacing',
+    'textAlign',
+    'textTransform',
+    'opacity',
+    'overflow',
+    'gap',
+    'flexDirection',
+    'alignItems',
+    'justifyContent',
+    'gridTemplateColumns',
+    'borderWidth',
+    'borderStyle',
+    'borderColor',
+    'transition',
+    'animation',
     'sourceUrl',
   ] as const) {
-    if (info[key] !== null && typeof info[key] !== 'string') return false;
+    if (info[key] !== null && info[key] !== undefined && typeof info[key] !== 'string') {
+      return false;
+    }
   }
   return isNonEmptyString(info.capturedAt);
 }

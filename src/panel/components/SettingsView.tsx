@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import type { PanelMetrics } from '../hooks/usePanelWidth';
 
 function manifestInfo(): Array<[string, string]> {
   try {
@@ -14,34 +15,39 @@ function manifestInfo(): Array<[string, string]> {
   }
 }
 
-export function SettingsView() {
+export function SettingsView({ metrics }: { metrics: PanelMetrics }) {
   const rows = useMemo(manifestInfo, []);
+  const padding = metrics.contentPadding;
+  const labelWidth = metrics.layout === 'compact' ? 64 : metrics.layout === 'regular' ? 78 : 90;
 
   return (
-    <div className="mx-auto w-full max-w-[640px] px-7 py-8">
-      <header className="mb-7">
-        <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-accent-bright">
+    <div className="min-h-0 flex-1 overflow-y-auto" style={{ paddingInline: padding, paddingBlock: padding + 4 }}>
+      <header className="mb-5">
+        <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-accent-bright">
           Extension
         </div>
-        <h1 className="mt-1.5 text-xl font-semibold tracking-tight text-fog-100">Settings</h1>
-        <p className="mt-1.5 text-[12px] leading-relaxed text-fog-400">
+        <h1 className="mt-1 text-lg font-semibold tracking-tight text-fog-100">Settings</h1>
+        <p className="mt-1.5 break-anywhere text-[11px] leading-relaxed text-fog-400">
           Runtime details for the installed extension. Inspection data stays in this browser and is
           never transmitted.
         </p>
       </header>
 
       <section className="overflow-hidden rounded-lg border border-ink-700 bg-ink-850">
-        <div className="border-b border-ink-700 px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.14em] text-fog-500">
+        <div className="border-b border-ink-700 px-3 py-2 font-mono text-[9px] uppercase tracking-[0.14em] text-fog-500">
           Manifest
         </div>
         <dl>
           {rows.map(([label, value]) => (
             <div
               key={label}
-              className="flex items-start justify-between gap-6 border-b border-ink-800 px-4 py-3 last:border-0"
+              className="grid items-start gap-x-2 border-b border-ink-800 px-3 py-2.5 last:border-0"
+              style={{ gridTemplateColumns: `${labelWidth}px minmax(0, 1fr)` }}
             >
-              <dt className="text-[12px] text-fog-400">{label}</dt>
-              <dd className="max-w-[60%] break-words text-right font-mono text-[11px] text-fog-200">
+              <dt className="truncate text-[11px] text-fog-400" title={label}>
+                {label}
+              </dt>
+              <dd className="min-w-0 break-anywhere text-right font-mono text-[10px] leading-[1.5] text-fog-200">
                 {value || '—'}
               </dd>
             </div>

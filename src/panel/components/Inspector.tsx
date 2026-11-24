@@ -1,12 +1,14 @@
+import type { ElementInfo, InspectorStatus } from '../../shared/types';
+import type { PanelMetrics } from '../hooks/usePanelWidth';
 import { Icon } from './Icon';
 import { ColorField, Field, Section } from './Field';
-import type { ElementInfo, InspectorStatus } from '../../shared/types';
 
 interface Props {
   status: InspectorStatus;
   element: ElementInfo | null;
   error: string | null;
   copied: boolean;
+  metrics: PanelMetrics;
   onStart: () => void;
   onStop: () => void;
   onCopyCss: () => void;
@@ -20,84 +22,136 @@ const statusLabel: Record<InspectorStatus, string> = {
   error: 'Error',
 };
 
-function EmptyState({ status }: { status: InspectorStatus }) {
-  const active = status === 'active' || status === 'starting';
+function labelWidthFor(metrics: PanelMetrics): number {
+  if (metrics.layout === 'compact') return 58;
+  if (metrics.layout === 'regular') return 70;
+  return 80;
+}
+
+function EmptyState({ compact, padding }: { compact: boolean; padding: number }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-10 pb-16 text-center">
+    <div
+      className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto text-center"
+      style={{ paddingInline: padding, paddingBlock: padding * 2 }}
+    >
       <div
-        className={`mb-5 flex size-12 items-center justify-center rounded-lg border ${
-          active
-            ? 'border-accent/60 bg-accent/10 text-accent-bright'
-            : 'border-ink-700 bg-ink-850 text-fog-500'
+        className={`flex shrink-0 items-center justify-center rounded-xl border border-ink-700 bg-ink-850 text-accent-bright ${
+          compact ? 'size-10' : 'size-12'
         }`}
       >
-        <Icon name={active ? 'crosshair' : 'cursor'} size={22} />
+        <Icon name="cursor" size={compact ? 20 : 24} />
       </div>
-      <h2 className="text-[14px] font-medium text-fog-200">
-        {active ? 'Inspector is live' : 'Nothing selected yet'}
+      <h2 className={`mt-4 font-semibold tracking-tight text-fog-100 ${compact ? 'text-base' : 'text-lg'}`}>
+        Inspect any element
       </h2>
-      <p className="mt-2 max-w-[280px] text-[12px] leading-relaxed text-fog-500">
-        {active
-          ? 'Move over the page to highlight an element, then click to capture its design. Press Esc to cancel.'
-          : 'Start inspection, then click any element on the current page to read its computed styles.'}
+      <p
+        className={`mt-2 max-w-[260px] leading-relaxed text-fog-400 ${compact ? 'text-[11px]' : 'text-[12px]'}`}
+      >
+        Start inspection, then click an element on the page to capture its computed design values.
       </p>
+      {!compact && (
+        <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.12em] text-fog-500">
+          Escape cancels
+        </p>
+      )}
     </div>
   );
 }
 
-function ElementDetails({ element }: { element: ElementInfo }) {
+function Geometry({ element }: { element: ElementInfo }) {
   return (
-    <>
-      <Section title="Element">
-        <div className="mb-3 flex items-center justify-between gap-4 rounded-md border border-ink-700 bg-ink-800 px-3 py-2.5">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[13px] text-accent-bright">&lt;{element.tag}&gt;</span>
-          </div>
-          <span className="font-mono text-[10px] uppercase tracking-wider text-fog-500">Selected</span>
+    <div
+      className="grid gap-1.5"
+      style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(88px, 1fr))' }}
+    >
+      <div className="min-w-0 rounded-md border border-ink-750 bg-ink-850 px-2.5 py-2">
+        <div className="font-mono text-[8px] uppercase tracking-[0.12em] text-fog-500">Width</div>
+        <div className="mt-0.5 truncate font-mono text-[13px] tabular-nums text-fog-100" title={`${element.dimensions.width}px`}>
+          {element.dimensions.width}px
         </div>
-        <Field label="ID" value={element.id ?? '—'} />
+      </div>
+      <div className="min-w-0 rounded-md border border-ink-750 bg-ink-850 px-2.5 py-2">
+        <div className="font-mono text-[8px] uppercase tracking-[0.12em] text-fog-500">Height</div>
+        <div className="mt-0.5 truncate font-mono text-[13px] tabular-nums text-fog-100" title={`${element.dimensions.height}px`}>
+          {element.dimensions.height}px
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ElementDetails({
+  element,
+  metrics,
+}: {
+  element: ElementInfo;
+  metrics: PanelMetrics;
+}) {
+  const labelWidth = labelWidthFor(metrics);
+  const compact = metrics.layout === 'compact';
+  const padding = metrics.contentPadding;
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        className="flex min-w-0 items-center gap-2 border-b border-ink-800"
+        style={{ paddingInline: padding, paddingBlock: padding + 2 }}
+      >
+        <span className="shrink-0 rounded border border-accent-dim bg-accent/10 px-1.5 py-0.5 font-mono text-[11px] text-accent-bright">
+          {element.tag}
+        </span>
+        {element.id && (
+          <span className="min-w-0 truncate font-mono text-[11px] text-fog-200" title={`#${element.id}`}>
+            #{element.id}
+          </span>
+        )}
+      </div>
+
+      <Section title="Element" padding={padding}>
         <Field
           label="Classes"
-          value={element.classes.length ? element.classes.join(' · ') : '—'}
+          value={element.classes.length ? element.classes.join(' · ') : null}
+          labelWidth={labelWidth}
+          long
         />
       </Section>
 
-      <Section title="Geometry">
-        <div className="grid grid-cols-2 gap-2.5">
-          <div className="rounded-md border border-ink-700 bg-ink-800 px-3 py-2.5">
-            <div className="font-mono text-[9px] uppercase tracking-wider text-fog-500">Width</div>
-            <div className="mt-1 font-mono text-[15px] text-fog-100">{element.dimensions.width}px</div>
-          </div>
-          <div className="rounded-md border border-ink-700 bg-ink-800 px-3 py-2.5">
-            <div className="font-mono text-[9px] uppercase tracking-wider text-fog-500">Height</div>
-            <div className="mt-1 font-mono text-[15px] text-fog-100">{element.dimensions.height}px</div>
-          </div>
+      <Section title="Geometry" padding={padding}>
+        <Geometry element={element} />
+        <div className="pt-1">
+          <Field label="Display" value={element.display} labelWidth={labelWidth} />
+          <Field label="Position" value={element.position} labelWidth={labelWidth} />
         </div>
       </Section>
 
-      <Section title="Colour">
-        <ColorField label="Background" value={element.backgroundColor} />
-        <ColorField label="Text" value={element.color} />
+      <Section title="Typography" padding={padding}>
+        <Field label="Family" value={element.fontFamily} labelWidth={labelWidth} long />
+        <Field label="Size" value={element.fontSize} labelWidth={labelWidth} numeric />
+        <Field label="Weight" value={element.fontWeight} labelWidth={labelWidth} numeric />
       </Section>
 
-      <Section title="Typography">
-        <Field label="Family" value={element.fontFamily ?? '—'} />
-        <Field label="Size" value={element.fontSize ?? '—'} />
-        <Field label="Weight" value={element.fontWeight ?? '—'} />
+      <Section title="Spacing" padding={padding}>
+        <Field label="Padding" value={element.padding} labelWidth={labelWidth} long />
+        <Field label="Margin" value={element.margin} labelWidth={labelWidth} long />
       </Section>
 
-      <Section title="Spacing">
-        <Field label="Padding" value={element.padding ?? '—'} />
-        <Field label="Margin" value={element.margin ?? '—'} />
+      <Section title="Surface" padding={padding}>
+        <ColorField label="Background" value={element.backgroundColor} labelWidth={labelWidth} />
+        <ColorField label="Text" value={element.color} labelWidth={labelWidth} />
+        <Field label="Radius" value={element.borderRadius} labelWidth={labelWidth} long />
+        <Field label="Shadow" value={element.boxShadow} labelWidth={labelWidth} long />
       </Section>
 
-      <Section title="Surface">
-        <Field label="Radius" value={element.borderRadius ?? '—'} />
-        <Field label="Shadow" value={element.boxShadow ?? '—'} />
-        <Field label="Display" value={element.display ?? '—'} />
-        <Field label="Position" value={element.position ?? '—'} />
-      </Section>
-    </>
+      {!compact && (
+        <div
+          className="pb-4 pt-1 font-mono text-[9px] leading-relaxed text-fog-500"
+          style={{ paddingInline: padding }}
+          title={element.capturedAt}
+        >
+          Captured {new Date(element.capturedAt).toLocaleTimeString()}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -106,74 +160,87 @@ export function Inspector({
   element,
   error,
   copied,
+  metrics,
   onStart,
   onStop,
   onCopyCss,
 }: Props) {
-  const active = status === 'active' || status === 'starting';
+  const compact = metrics.layout === 'compact';
+  const padding = metrics.contentPadding;
+  const active = status === 'active';
   const busy = status === 'starting' || status === 'stopping';
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
-      <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-ink-700 px-7">
-        <div className="flex items-center gap-3">
-          <h1 className="text-[13px] font-semibold tracking-tight text-fog-100">Inspector</h1>
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-ink-950">
+      <header
+        className="flex shrink-0 items-center gap-2 border-b border-ink-700 bg-ink-900"
+        style={{ paddingInline: padding, height: compact ? 48 : 56 }}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-mono text-[9px] uppercase tracking-[0.16em] text-fog-500">
+            PixelPeek
+          </div>
+          <h1 className="truncate text-[14px] font-semibold tracking-tight text-fog-100">
+            Inspector
+          </h1>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
           <span
-            className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider ${
+            className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-wide ${
               active
-                ? 'border-accent/40 bg-accent/10 text-accent-bright'
-                : status === 'error'
-                  ? 'border-red-500/30 bg-red-500/10 text-red-300'
-                  : 'border-ink-700 bg-ink-850 text-fog-500'
+                ? 'border-accent-dim bg-accent/10 text-accent-bright'
+                : 'border-ink-700 bg-ink-850 text-fog-500'
             }`}
           >
-            <span
-              className={`size-1.5 rounded-full ${
-                active ? 'bg-accent' : status === 'error' ? 'bg-red-400' : 'bg-fog-500'
-              }`}
-            />
-            {statusLabel[status]}
+            <span className={`size-1 rounded-full ${active ? 'bg-accent' : 'bg-fog-500'}`} />
+            {compact ? (active ? 'Live' : statusLabel[status]) : statusLabel[status]}
           </span>
+          <button
+            type="button"
+            onClick={active ? onStop : onStart}
+            disabled={busy}
+            aria-label={active ? 'Stop inspection' : 'Start inspection'}
+            className={`shrink-0 rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+              active
+                ? 'border border-ink-600 bg-ink-800 text-fog-200 hover:bg-ink-750'
+                : 'bg-accent text-ink-950 hover:bg-accent-bright'
+            }`}
+          >
+            {active ? (compact ? 'Stop' : 'Stop inspection') : compact ? 'Start' : 'Start inspection'}
+          </button>
         </div>
-
-        <button
-          type="button"
-          disabled={busy}
-          onClick={active ? onStop : onStart}
-          className={`flex items-center gap-2 rounded-md border px-3 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
-            active
-              ? 'border-ink-600 bg-ink-800 text-fog-200 hover:border-fog-500 hover:text-fog-100'
-              : 'border-accent bg-accent text-white hover:bg-accent-bright'
-          }`}
-        >
-          <Icon name={active ? 'square' : 'crosshair'} size={13} />
-          {active ? 'Stop inspection' : 'Start inspection'}
-        </button>
       </header>
 
       {error && (
-        <div className="mx-7 mt-4 rounded-md border border-red-500/25 bg-red-500/8 px-3 py-2 text-[11px] text-red-200">
+        <div
+          className="shrink-0 rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-red-200"
+          style={{ marginInline: padding, marginTop: padding }}
+          role="alert"
+        >
           {error}
         </div>
       )}
 
       {element ? (
-        <div className="flex-1 overflow-y-auto">
-          <ElementDetails element={element} />
-          <div className="sticky bottom-0 border-t border-ink-700 bg-ink-900/95 px-7 py-4 backdrop-blur-sm">
-            <button
-              type="button"
-              onClick={onCopyCss}
-              className="flex w-full items-center justify-center gap-2 rounded-md border border-ink-600 bg-ink-800 px-3 py-2 text-[12px] font-medium text-fog-100 transition-colors hover:border-accent hover:bg-ink-750"
-            >
-              <Icon name={copied ? 'check' : 'copy'} size={14} />
-              {copied ? 'CSS copied' : 'Copy CSS'}
-            </button>
-          </div>
-        </div>
+        <ElementDetails element={element} metrics={metrics} />
       ) : (
-        <EmptyState status={status} />
+        <EmptyState compact={compact} padding={padding} />
       )}
-    </div>
+
+      <div
+        className="shrink-0 border-t border-ink-700 bg-ink-900"
+        style={{ paddingInline: padding, paddingBlock: compact ? 8 : 12 }}
+      >
+        <button
+          type="button"
+          onClick={onCopyCss}
+          disabled={!element}
+          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-ink-600 bg-ink-850 px-3 py-2 text-[11px] font-medium text-fog-200 transition-colors hover:border-accent-dim hover:bg-ink-800 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Icon name={copied ? 'check' : 'copy'} size={14} />
+          {copied ? 'Copied CSS' : 'Copy CSS'}
+        </button>
+      </div>
+    </main>
   );
 }
