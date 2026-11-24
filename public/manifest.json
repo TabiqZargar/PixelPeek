@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "PixelPeek",
+  "short_name": "PixelPeek",
+  "version": "0.1.0",
+  "description": "Inspect any website's elements and copy their design tokens.",
+  "permissions": ["activeTab", "scripting", "storage", "sidePanel"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open PixelPeek"
+  },
+  "side_panel": {
+    "default_path": "panel/index.html"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}
