@@ -1,11 +1,13 @@
 import {
   MessageType,
+  isHierarchyDirection,
   type ContentEvent,
+  type ContentRequest,
   type PanelEvent,
   type RequestResult,
   type StateResult,
 } from '../shared/messages';
-import { IDLE_STATE, type InspectionState } from '../shared/types';
+import { IDLE_STATE, type HierarchyDirection, type InspectionState } from '../shared/types';
 import { describeMessageError, isInspectableUrl } from '../shared/tabs';
 import { pingTab, sendToTab } from '../shared/transport';
 
@@ -37,8 +39,40 @@ async function stopTab(tabId: number): Promise<void> {
 
 async function endInspection(state: InspectionState): Promise<void> {
   if (state.tabId !== null) await stopTab(state.tabId);
+  const idle: InspectionState = {
+    ...IDLE_STATE,
+    lastTabId: state.tabId ?? state.lastTabId ?? null,
+  };
+  await setState(idle);
+  broadcast({ type: MessageType.StateChanged, payload: idle });
+}
+
+async function clearInspection(state: InspectionState): Promise<void> {
+  if (state.tabId !== null) await stopTab(state.tabId);
   await setState(IDLE_STATE);
   broadcast({ type: MessageType.StateChanged, payload: IDLE_STATE });
+}
+
+async function forwardToContent(message: ContentRequest): Promise<RequestResult> {
+  const state = await getState();
+  const tabId = state.tabId ?? state.lastTabId;
+  if (tabId === null || tabId === undefined) {
+    return {
+      ok: false,
+      error: 'Select an element before using the inspector tools.',
+      errorCode: 'no-selection',
+    };
+  }
+  try {
+    await sendToTab(tabId, message);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: describeMessageError(error),
+      errorCode: 'content-unreachable',
+    };
+  }
 }
 
 async function startInspection(): Promise<RequestResult> {
@@ -66,7 +100,7 @@ async function startInspection(): Promise<RequestResult> {
     return { ok: false, error: describeMessageError(error) };
   }
 
-  const state: InspectionState = { tabId, active: true };
+  const state: InspectionState = { tabId, active: true, lastTabId: tabId };
   await setState(state);
   broadcast({ type: MessageType.StateChanged, payload: state });
   return { ok: true, state };
@@ -75,7 +109,10 @@ async function startInspection(): Promise<RequestResult> {
 async function stopInspection(): Promise<RequestResult> {
   const state = await getState();
   await endInspection(state);
-  return { ok: true, state: IDLE_STATE };
+  return {
+    ok: true,
+    state: { ...IDLE_STATE, lastTabId: state.tabId ?? state.lastTabId ?? null },
+  };
 }
 
 type PanelBoundEvent = Exclude<ContentEvent, { type: typeof MessageType.Pong }>;
@@ -85,11 +122,14 @@ async function onContentEvent(message: PanelBoundEvent): Promise<void> {
   if (message.type === MessageType.StateChanged) {
     if (!message.payload.active) {
       if (!state.active) return;
-      await setState(IDLE_STATE);
-      broadcast({ type: MessageType.StateChanged, payload: IDLE_STATE });
+      await endInspection(state);
       return;
     }
-    const merged: InspectionState = { tabId: state.tabId, active: true };
+    const merged: InspectionState = {
+      tabId: state.tabId,
+      active: true,
+      lastTabId: state.tabId ?? state.lastTabId ?? message.payload.lastTabId ?? null,
+    };
     await setState(merged);
     broadcast({ type: MessageType.StateChanged, payload: merged });
     return;
@@ -126,10 +166,36 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     void stopInspection().then(sendResponse);
     return true;
   }
+  if (type === MessageType.GetSnapshot) {
+    void forwardToContent({ type: MessageType.GetSnapshot }).then(sendResponse);
+    return true;
+  }
+  if (type === MessageType.NavigateHierarchy) {
+    if (!isHierarchyDirection((message as { direction?: unknown }).direction)) {
+      sendResponse({
+        ok: false,
+        error: 'Unknown hierarchy direction.',
+        errorCode: 'invalid-direction',
+      });
+      return true;
+    }
+    const { direction, index } = message as {
+      direction: HierarchyDirection;
+      index?: unknown;
+    };
+    void forwardToContent({
+      type: MessageType.NavigateHierarchy,
+      direction,
+      ...(typeof index === 'number' && Number.isInteger(index) ? { index } : {}),
+    }).then(sendResponse);
+    return true;
+  }
   if (
     type === MessageType.ElementSelected ||
     type === MessageType.StateChanged ||
-    type === MessageType.RuntimeError
+    type === MessageType.RuntimeError ||
+    type === MessageType.SnapshotChanged ||
+    type === MessageType.SelectionCleared
   ) {
     void onContentEvent(message as PanelBoundEvent).then(() => sendResponse({ ok: true }));
     return true;
@@ -140,7 +206,7 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   void getState().then((state) => {
     if (state.active && state.tabId !== null && state.tabId !== tabId) {
-      void endInspection(state);
+      void clearInspection(state);
     }
   });
 });
@@ -148,12 +214,12 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (!changeInfo.url) return;
   void getState().then((state) => {
-    if (state.active && state.tabId === tabId) void endInspection(state);
+    if (state.tabId === tabId || state.lastTabId === tabId) void clearInspection(state);
   });
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   void getState().then((state) => {
-    if (state.active && state.tabId === tabId) void endInspection(state);
+    if (state.tabId === tabId || state.lastTabId === tabId) void clearInspection(state);
   });
 });

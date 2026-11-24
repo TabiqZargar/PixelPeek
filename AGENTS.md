@@ -1,6 +1,6 @@
 # PixelPeek
 
-MV3 browser extension for inspecting any webpage's computed design values. Phase 1.5: side panel, element picker, responsive workspace, and deterministic Agent Prompts.
+MV3 browser extension for inspecting any webpage's computed design values. Phase 2: advanced CSS reverse-engineering workspace with box model, computed properties, typography, colours, gradients, hierarchy navigation, and deterministic Agent Prompts.
 
 ## Build and verification
 
@@ -19,6 +19,8 @@ MV3 browser extension for inspecting any webpage's computed design values. Phase
 - `src/content/inspect.ts` and `src/content/css.ts` are pure and receive their dependencies injected. Keep DOM reads inside `inspect.ts` and keep CSS values allowlisted/sanitized in `css.ts` — the Copy CSS feature must never emit `url()`, `;`, braces, or form values.
 - Clicking an element in the picker captures it and ends inspection immediately (Escape also ends it), so normal page interaction is restored. Background also ends inspection on tab activation, URL change, and tab removal.
 - `src/panel/hooks/usePanelWidth.ts` owns the responsive breakpoints (compact <380px, regular <480px, wide otherwise). Panel surfaces must not reintroduce fixed wide sidebars or `px-7` padding; keep `min-w-0` through the flex/grid chain and use `break-anywhere` for long CSS values.
+- Phase 2 extraction is pure and dependency-injected: `src/content/box-model.ts`, `css-properties.ts`, `typography.ts`, `color.ts`, `gradient.ts`, `hierarchy.ts`, and `snapshot.ts` receive style/geometry/DOM readers and never touch `chrome.*`. The content script keeps only a bounded current element reference for hierarchy navigation and clears it on navigation, DOM removal, or explicit stop.
+- `InspectionState.lastTabId` lets snapshot and hierarchy requests reach the content script after the picker has stopped; clear it on tab activation, URL change, and tab removal. Never restore selection from a tab whose page navigated.
 - `src/panel/prompts/` is UI-free and deterministic: `model.ts` converts detected `ElementInfo` into facts and omissions, `templates.ts` renders the ten-section prompt for the three output modes. Never fabricate missing properties or mix inferred guidance into detected values.
 
 ## Environment gotchas

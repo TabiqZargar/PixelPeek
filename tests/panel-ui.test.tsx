@@ -5,7 +5,7 @@ import { AgentPromptsView } from '../src/panel/components/AgentPromptsView';
 import { Inspector } from '../src/panel/components/Inspector';
 import { Sidebar } from '../src/panel/components/Sidebar';
 import { getPanelMetrics } from '../src/panel/hooks/usePanelWidth';
-import type { ElementInfo } from '../src/shared/types';
+import type { ElementInfo, ElementSnapshot } from '../src/shared/types';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -27,6 +27,43 @@ const element: ElementInfo = {
   position: 'relative',
   capturedAt: 'fixed',
   sourceUrl: 'https://example.com/',
+};
+
+const snapshot: ElementSnapshot = {
+  element,
+  boxModel: {
+    boxSizing: 'border-box',
+    computedWidth: '120px',
+    computedHeight: '40px',
+    measured: { width: 120, height: 40 },
+    contentWidth: 120,
+    contentHeight: 40,
+    estimatedOuter: { width: 120, height: 40 },
+    margin: { top: '0px', right: '0px', bottom: '0px', left: '0px' },
+    border: { top: '0px', right: '0px', bottom: '0px', left: '0px' },
+    padding: { top: '8px', right: '12px', bottom: '8px', left: '12px' },
+    notes: [],
+  },
+  properties: [],
+  typography: {
+    fontFamily: { value: 'Inter, sans-serif', matchesParent: false },
+    fontSize: { value: '14px', matchesParent: false },
+    fontWeight: { value: '600', matchesParent: false },
+    fontStyle: { value: 'normal', matchesParent: true },
+    lineHeight: { value: '20px', matchesParent: false },
+    letterSpacing: { value: 'normal', matchesParent: true },
+    wordSpacing: { value: 'normal', matchesParent: true },
+    textAlign: { value: 'start', matchesParent: true },
+    textTransform: { value: 'none', matchesParent: true },
+    textDecoration: { value: 'none solid rgb(255, 255, 255)', matchesParent: false },
+    color: { value: '#fff', matchesParent: false },
+    whiteSpace: { value: 'normal', matchesParent: true },
+  },
+  colors: [],
+  gradients: [],
+  hierarchy: { parent: null, children: [], previousSibling: null, nextSibling: null },
+  limitations: [],
+  capturedAt: 'fixed',
 };
 
 let container: HTMLDivElement;
@@ -56,11 +93,15 @@ describe('panel UI at narrow widths', () => {
         <Inspector
           status="idle"
           element={element}
+          snapshot={snapshot}
           error={null}
           copied={false}
+          copiedKey={null}
           metrics={metrics}
           onStart={() => {}}
           onStop={() => {}}
+          onNavigate={() => {}}
+          onCopyText={() => {}}
           onCopyCss={() => {}}
         />
       </>,
@@ -79,11 +120,15 @@ describe('panel UI at narrow widths', () => {
       <Inspector
         status="idle"
         element={null}
+        snapshot={null}
         error={null}
         copied={false}
+        copiedKey={null}
         metrics={metrics}
         onStart={() => {}}
         onStop={() => {}}
+        onNavigate={() => {}}
+        onCopyText={() => {}}
         onCopyCss={() => {}}
       />,
     );
@@ -91,6 +136,35 @@ describe('panel UI at narrow widths', () => {
       (button) => button.getAttribute('aria-label') === 'Start inspection',
     );
     expect(startButton?.textContent).toBe('Start');
+  });
+
+
+  it('renders the Phase 2 inspector tabs and property explorer', () => {
+    const metrics = getPanelMetrics(640);
+    render(
+      <Inspector
+        status="idle"
+        element={element}
+        snapshot={snapshot}
+        error={null}
+        copied={false}
+        copiedKey={null}
+        metrics={metrics}
+        onStart={() => {}}
+        onStop={() => {}}
+        onNavigate={() => {}}
+        onCopyText={() => {}}
+        onCopyCss={() => {}}
+      />,
+    );
+    expect(container.textContent).toContain('Box Model');
+    expect(container.textContent).toContain('Hierarchy');
+    const cssTab = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'CSS' && button.getAttribute('role') === 'tab',
+    )!;
+    act(() => cssTab.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(container.querySelector('input[type="search"]')).not.toBeNull();
+    expect(container.textContent).toContain('properties');
   });
 
   it('generates a prompt from the selected reference in the workspace', () => {

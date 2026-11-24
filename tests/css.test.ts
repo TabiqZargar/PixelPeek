@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildSelector, cssEscape, sanitizeCssValue, serializeCss } from '../src/content/css';
+import { buildSelector, cssEscape, sanitizeCssValue, serializeCss, serializeSnapshotCss, suggestSelectors } from '../src/content/css';
 import type { ElementInfo } from '../src/shared/types';
+import { makeSnapshot } from './fixtures';
 
 const info: ElementInfo = {
   tag: 'div',
@@ -85,5 +86,31 @@ describe('serializeCss', () => {
     expect(output).not.toContain('display: none');
     expect(output).not.toMatch(/color: red; \}/);
     expect(output).toContain('\\');
+  });
+});
+
+describe('Phase 2 CSS export', () => {
+  it('suggests bounded, escaped selectors', () => {
+    const selectors = suggestSelectors(makeSnapshot());
+    expect(selectors[0]).toBe('#cta');
+    expect(selectors).toContain('button.primary.large');
+    expect(selectors.length).toBeLessThanOrEqual(4);
+  });
+
+  it('serializes snapshot values without leaking metadata or unsafe values', () => {
+    const css = serializeSnapshotCss(
+      makeSnapshot({
+        properties: [
+          { name: 'background-color', value: 'url(https://tracker.example/x)', category: 'Background' },
+          { name: 'box-shadow', value: 'red; } body { display: none', category: 'Shadows & Effects' },
+        ],
+      }),
+    );
+    expect(css).toContain('font-size: 14px;');
+    expect(css).toContain('margin: 0;');
+    expect(css).not.toContain('url(');
+    expect(css).not.toContain('display: none');
+    expect(css).not.toContain('sourceUrl');
+    expect(css).not.toContain('capturedAt');
   });
 });

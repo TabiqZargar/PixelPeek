@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MessageType } from '../src/shared/messages';
 import {
   getInspectionState,
+  getSnapshot,
+  navigateHierarchy,
   hasRuntime,
   pingTab,
   sendToBackground,
@@ -70,5 +72,21 @@ describe('transport', () => {
     await expect(
       sendToTab(9, { type: MessageType.StartInspection }),
     ).rejects.toThrow('Receiving end does not exist');
+  });
+});
+
+describe('Phase 2 transport helpers', () => {
+  it('sends snapshot requests through the typed contract', async () => {
+    const { runtime } = stubChrome();
+    runtime.sendMessage.mockResolvedValue({ ok: true });
+    await expect(getSnapshot()).resolves.toEqual({ ok: true });
+    expect(runtime.sendMessage).toHaveBeenCalledWith({ type: MessageType.GetSnapshot });
+
+    await expect(navigateHierarchy('child', 1)).resolves.toEqual({ ok: true });
+    expect(runtime.sendMessage).toHaveBeenLastCalledWith({
+      type: MessageType.NavigateHierarchy,
+      direction: 'child',
+      index: 1,
+    });
   });
 });

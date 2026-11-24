@@ -1,6 +1,6 @@
-import { MessageType, type ContentEvent } from '../shared/messages';
-import type { ElementInfo } from '../shared/types';
-import { extractElementInfo } from './inspect';
+import { MessageType, isHierarchyDirection, type ContentEvent } from '../shared/messages';
+import type { ElementSnapshot, HierarchyDirection } from '../shared/types';
+import { createSnapshot, type SnapshotDeps } from './snapshot';
 
 const HOST_ID = 'pixelpeek-overlay-host';
 
@@ -24,6 +24,11 @@ const OVERLAY_CSS = `
   box-shadow: 0 0 0 1px rgba(8, 8, 10, 0.8);
   pointer-events: none;
 }
+.selected {
+  border-color: #48d6a8;
+  background: rgba(72, 214, 168, 0.08);
+  box-shadow: 0 0 0 1px rgba(8, 8, 10, 0.85), 0 0 14px rgba(72, 214, 168, 0.25);
+}
 .label {
   position: fixed;
   box-sizing: border-box;
@@ -35,6 +40,10 @@ const OVERLAY_CSS = `
   font: 600 11px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
   white-space: nowrap;
   pointer-events: none;
+}
+.label.selected {
+  border-color: rgba(72, 214, 168, 0.6);
+  color: #c8f7e6;
 }
 .hidden { display: none; }
 `;
@@ -82,30 +91,60 @@ function emit(event: ContentEvent): void {
   });
 }
 
+const snapshotDeps: SnapshotDeps = {
+  computedStyle: (element) => element.ownerDocument.defaultView!.getComputedStyle(element),
+  parentStyle: (element) => element.ownerDocument.defaultView!.getComputedStyle(element),
+  boundingRect: (element) => element.getBoundingClientRect(),
+  hierarchy: {
+    parent: (element) => element.parentElement,
+    children: (element) => Array.from(element.children),
+    previousSibling: (element) => element.previousElementSibling,
+    nextSibling: (element) => element.nextElementSibling,
+    meta: (element, depth) => ({
+      tag: element.tagName.toLowerCase(),
+      id: element.id || null,
+      classes: Array.from(element.classList).slice(0, 6),
+      depth,
+    }),
+  },
+};
+
 let active = false;
 let overlay: Overlay | null = null;
 let highlighted: Element | null = null;
+let selected: Element | null = null;
 
 function hideHighlight(): void {
   highlighted = null;
   if (!overlay) return;
-  overlay.box.classList.add('hidden');
-  overlay.label.classList.add('hidden');
+  overlay.box.className = 'box hidden';
+  overlay.label.className = 'label hidden';
+  if (selected?.isConnected) showSelection(selected);
+}
+
+function showBox(element: Element, selectedStyle: boolean): DOMRect {
+  const rect = element.getBoundingClientRect();
+  if (!overlay) return rect;
+  overlay.box.className = selectedStyle ? 'box selected' : 'box';
+  overlay.label.className = selectedStyle ? 'label selected' : 'label';
+  overlay.label.textContent = `<${element.tagName.toLowerCase()}> ${Math.round(rect.width)} × ${Math.round(rect.height)}${selectedStyle ? ' · selected' : ''}`;
+  positionOverlay(rect);
+  return rect;
 }
 
 function showHighlight(element: Element): void {
   if (!overlay) return;
-  if (element === highlighted) {
-    const rect = element.getBoundingClientRect();
-    positionOverlay(rect);
+  if (element === highlighted && element !== selected) {
+    positionOverlay(element.getBoundingClientRect());
     return;
   }
   highlighted = element;
-  const rect = element.getBoundingClientRect();
-  overlay.box.classList.remove('hidden');
-  overlay.label.classList.remove('hidden');
-  overlay.label.textContent = `<${element.tagName.toLowerCase()}> ${Math.round(rect.width)} × ${Math.round(rect.height)}`;
-  positionOverlay(rect);
+  showBox(element, false);
+}
+
+function showSelection(element: Element): void {
+  if (!overlay) return;
+  showBox(element, true);
 }
 
 function positionOverlay(rect: DOMRect): void {
@@ -120,6 +159,36 @@ function positionOverlay(rect: DOMRect): void {
   label.style.width = `${labelWidth}px`;
   label.style.left = `${Math.max(0, Math.min(rect.left, window.innerWidth - labelWidth))}px`;
   label.style.top = `${rect.top >= 26 ? rect.top - 24 : rect.top + 2}px`;
+}
+
+function clearSelection(reason: string): void {
+  selected = null;
+  emit({ type: MessageType.SelectionCleared, payload: { reason } });
+  hideHighlight();
+  overlay?.host.remove();
+  overlay = null;
+}
+
+function capture(element: Element): ElementSnapshot {
+  const snapshot = createSnapshot(element, snapshotDeps);
+  selected = element;
+  emit({ type: MessageType.ElementSelected, payload: snapshot.element });
+  emit({ type: MessageType.SnapshotChanged, payload: snapshot });
+  return snapshot;
+}
+
+function currentTarget(direction: HierarchyDirection, index?: number): Element | null {
+  if (!selected?.isConnected) return null;
+  switch (direction) {
+    case 'parent':
+      return selected.parentElement;
+    case 'child':
+      return selected.children[Math.max(0, index ?? 0)] ?? null;
+    case 'previous-sibling':
+      return selected.previousElementSibling;
+    case 'next-sibling':
+      return selected.nextElementSibling;
+  }
 }
 
 function onMove(event: MouseEvent): void {
@@ -138,29 +207,34 @@ function onClick(event: MouseEvent): void {
   event.stopPropagation();
   event.stopImmediatePropagation();
 
-  let info: ElementInfo;
   try {
-    info = extractElementInfo(target);
+    capture(target);
   } catch (error) {
     emit({
       type: MessageType.RuntimeError,
-      payload: { message: error instanceof Error ? error.message : String(error) },
+      payload: {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'capture-failed',
+      },
     });
-    stop();
+    stop({ clearSelection: true });
     return;
   }
-  emit({ type: MessageType.ElementSelected, payload: info });
   stop();
 }
 
 function onKeyDown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     event.preventDefault();
-    stop();
+    stop({ clearSelection: true });
   }
 }
 
 function onPageHide(): void {
+  stop({ clearSelection: true });
+}
+
+function onBlur(): void {
   stop();
 }
 
@@ -170,25 +244,29 @@ function start(): void {
   overlay = createOverlay(doc);
   if (!overlay) return;
   active = true;
+  highlighted = null;
   doc.addEventListener('mousemove', onMove, true);
   doc.addEventListener('click', onClick, true);
   doc.addEventListener('keydown', onKeyDown, true);
-  window.addEventListener('blur', stop, true);
+  window.addEventListener('blur', onBlur, true);
   window.addEventListener('pagehide', onPageHide, true);
   emit({ type: MessageType.StateChanged, payload: { tabId: null, active: true } });
 }
 
-function stop(): void {
+function stop(options: { clearSelection?: boolean } = {}): void {
   if (!active) return;
   active = false;
   document.removeEventListener('mousemove', onMove, true);
   document.removeEventListener('click', onClick, true);
   document.removeEventListener('keydown', onKeyDown, true);
-  window.removeEventListener('blur', stop, true);
+  window.removeEventListener('blur', onBlur, true);
   window.removeEventListener('pagehide', onPageHide, true);
-  hideHighlight();
-  overlay?.host.remove();
-  overlay = null;
+  highlighted = null;
+  if (options.clearSelection) {
+    clearSelection('inspection stopped');
+  } else if (selected?.isConnected) {
+    showSelection(selected);
+  }
   emit({ type: MessageType.StateChanged, payload: { tabId: null, active: false } });
 }
 
@@ -210,6 +288,63 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
       stop();
       sendResponse({ ok: true });
       return false;
+    case MessageType.GetSnapshot: {
+      if (!selected) {
+        sendResponse({ ok: false, error: 'No element is selected.', errorCode: 'no-selection' });
+        return false;
+      }
+      if (!selected.isConnected) {
+        clearSelection('element was removed from the page');
+        sendResponse({ ok: false, error: 'The selected element is no longer in the page.', errorCode: 'detached' });
+        return false;
+      }
+      try {
+        capture(selected);
+        sendResponse({ ok: true });
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          errorCode: 'capture-failed',
+        });
+      }
+      return false;
+    }
+    case MessageType.NavigateHierarchy: {
+      const directionValue = (message as { direction?: unknown }).direction;
+      if (!isHierarchyDirection(directionValue)) {
+        sendResponse({ ok: false, error: 'Unknown hierarchy direction.', errorCode: 'invalid-direction' });
+        return false;
+      }
+      if (!selected) {
+        sendResponse({ ok: false, error: 'No element is selected.', errorCode: 'no-selection' });
+        return false;
+      }
+      if (!selected.isConnected) {
+        clearSelection('element was removed from the page');
+        sendResponse({ ok: false, error: 'The selected element is no longer in the page.', errorCode: 'detached' });
+        return false;
+      }
+      const indexValue = (message as { index?: unknown }).index;
+      const index = typeof indexValue === 'number' && Number.isInteger(indexValue) ? indexValue : undefined;
+      const target = currentTarget(directionValue, index);
+      if (!target || isIgnored(target)) {
+        sendResponse({ ok: false, error: 'There is no element in that direction.', errorCode: 'no-target' });
+        return false;
+      }
+      try {
+        capture(target);
+        if (!active) showSelection(target);
+        sendResponse({ ok: true });
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          errorCode: 'capture-failed',
+        });
+      }
+      return false;
+    }
     default:
       return false;
   }

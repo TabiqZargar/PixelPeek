@@ -3,13 +3,16 @@ import {
   MessageType,
   isContentEvent,
   isElementInfo,
+  isElementSnapshot,
   isInspectionState,
   isPanelEvent,
+  isPanelRequest,
   isRequestResult,
   isStateResult,
 } from '../src/shared/messages';
 import { describeMessageError, isInspectableUrl } from '../src/shared/tabs';
 import type { ElementInfo } from '../src/shared/types';
+import { makeSnapshot } from './fixtures';
 
 const element: ElementInfo = {
   tag: 'button',
@@ -84,5 +87,23 @@ describe('tab and error helpers', () => {
   it('stringifies unknown errors', () => {
     expect(describeMessageError(new Error('boom'))).toBe('boom');
     expect(describeMessageError('raw')).toBe('raw');
+  });
+});
+
+describe('Phase 2 message guards', () => {
+  it('accepts a full snapshot and rejects malformed nested payloads', () => {
+    expect(isElementSnapshot(makeSnapshot())).toBe(true);
+    expect(isElementSnapshot({ ...makeSnapshot(), boxModel: { measured: {} } })).toBe(false);
+    expect(isElementSnapshot({ ...makeSnapshot(), hierarchy: { children: 'none' } })).toBe(false);
+    expect(isPanelEvent({ type: MessageType.SnapshotChanged, payload: makeSnapshot() })).toBe(true);
+    expect(isPanelEvent({ type: MessageType.SelectionCleared, payload: { reason: 'stopped' } })).toBe(true);
+  });
+
+  it('validates snapshot and hierarchy requests', () => {
+    expect(isPanelRequest({ type: MessageType.GetSnapshot })).toBe(true);
+    expect(isPanelRequest({ type: MessageType.NavigateHierarchy, direction: 'child', index: 2 })).toBe(true);
+    expect(isPanelRequest({ type: MessageType.NavigateHierarchy, direction: 'sideways' })).toBe(false);
+    expect(isRequestResult({ ok: false, errorCode: 'no-selection' })).toBe(true);
+    expect(isInspectionState({ tabId: 4, active: true, lastTabId: 4 })).toBe(true);
   });
 });

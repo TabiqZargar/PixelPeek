@@ -9,7 +9,19 @@ import { Sidebar, type View } from './components/Sidebar';
 export function App() {
   const [view, setView] = useState<View>('inspector');
   const metrics = usePanelMetrics();
-  const { status, element, error, copied, start, stop, copyCss } = useInspector();
+  const {
+    status,
+    element,
+    snapshot,
+    error,
+    copied,
+    copiedKey,
+    start,
+    stop,
+    navigate,
+    copyText,
+    copyCss,
+  } = useInspector();
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-ink-950">
@@ -23,11 +35,15 @@ export function App() {
         <Inspector
           status={status}
           element={element}
+          snapshot={snapshot}
           error={error}
           copied={copied}
+          copiedKey={copiedKey}
           metrics={metrics}
           onStart={() => void start()}
           onStop={() => void stop()}
+          onNavigate={(direction, index) => void navigate(direction, index)}
+          onCopyText={(text, key) => void copyText(text, key)}
           onCopyCss={() => void copyCss()}
         />
       )}

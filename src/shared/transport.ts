@@ -8,7 +8,7 @@ import {
   type PanelRequest,
   type RequestResult,
 } from './messages';
-import type { InspectionState } from './types';
+import type { HierarchyDirection, InspectionState } from './types';
 
 export function hasRuntime(): boolean {
   return typeof chrome !== 'undefined' && !!chrome.runtime && !!chrome.runtime.id;
@@ -31,6 +31,17 @@ export async function getInspectionState(): Promise<InspectionState> {
   const response: unknown = await chrome.runtime.sendMessage({ type: MessageType.GetState });
   if (!isStateResult(response)) throw new Error('Invalid state response from the background service worker.');
   return response.state;
+}
+
+export async function getSnapshot(): Promise<RequestResult> {
+  return sendToBackground({ type: MessageType.GetSnapshot });
+}
+
+export async function navigateHierarchy(
+  direction: HierarchyDirection,
+  index?: number,
+): Promise<RequestResult> {
+  return sendToBackground({ type: MessageType.NavigateHierarchy, direction, index });
 }
 
 export async function pingTab(tabId: number): Promise<boolean> {
