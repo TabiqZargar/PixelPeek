@@ -8,7 +8,7 @@ import {
   type PanelRequest,
   type RequestResult,
 } from './messages';
-import type { HierarchyDirection, InspectionState } from './types';
+import type { HierarchyDirection, InspectionState, MotionReplayAction } from './types';
 
 export function hasRuntime(): boolean {
   return typeof chrome !== 'undefined' && !!chrome.runtime && !!chrome.runtime.id;
@@ -42,6 +42,14 @@ export async function navigateHierarchy(
   index?: number,
 ): Promise<RequestResult> {
   return sendToBackground({ type: MessageType.NavigateHierarchy, direction, index });
+}
+
+export async function replayMotion(action: MotionReplayAction, animationId?: string): Promise<RequestResult> {
+  return sendToBackground({
+    type: MessageType.ReplayMotion,
+    action,
+    ...(animationId ? { animationId } : {}),
+  });
 }
 
 export async function pingTab(tabId: number): Promise<boolean> {

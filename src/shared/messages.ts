@@ -3,6 +3,8 @@ import type {
   ElementSnapshot,
   HierarchyDirection,
   InspectionState,
+  MotionReplayAction,
+  MotionSnapshot,
   SelectionClearedPayload,
 } from './types';
 
@@ -19,6 +21,7 @@ export const MessageType = {
   NavigateHierarchy: 'pixelpeek/navigate-hierarchy',
   SnapshotChanged: 'pixelpeek/snapshot-changed',
   SelectionCleared: 'pixelpeek/selection-cleared',
+  ReplayMotion: 'pixelpeek/replay-motion',
 } as const;
 
 export type MessageTypeValue = (typeof MessageType)[keyof typeof MessageType];
@@ -28,14 +31,16 @@ export type PanelRequest =
   | { type: typeof MessageType.StopInspection }
   | { type: typeof MessageType.GetState }
   | { type: typeof MessageType.GetSnapshot }
-  | { type: typeof MessageType.NavigateHierarchy; direction: HierarchyDirection; index?: number };
+  | { type: typeof MessageType.NavigateHierarchy; direction: HierarchyDirection; index?: number }
+  | { type: typeof MessageType.ReplayMotion; action: MotionReplayAction; animationId?: string };
 
 export type ContentRequest =
   | { type: typeof MessageType.Ping }
   | { type: typeof MessageType.StartInspection }
   | { type: typeof MessageType.StopInspection }
   | { type: typeof MessageType.GetSnapshot }
-  | { type: typeof MessageType.NavigateHierarchy; direction: HierarchyDirection; index?: number };
+  | { type: typeof MessageType.NavigateHierarchy; direction: HierarchyDirection; index?: number }
+  | { type: typeof MessageType.ReplayMotion; action: MotionReplayAction; animationId?: string };
 
 export type ContentEvent =
   | { type: typeof MessageType.Pong }
@@ -72,6 +77,162 @@ function isNullableString(value: unknown): value is string | null {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNullableFiniteNumber(value: unknown): boolean {
+  return value === null || isFiniteNumber(value);
+}
+
+function isMotionTarget(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isNonEmptyString(value.tag) &&
+    isNullableString(value.id) &&
+    isStringArray(value.classes) &&
+    isFiniteNumber(value.depth)
+  );
+}
+
+function isMotionTiming(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isNullableFiniteNumber(value.duration) &&
+    isNullableFiniteNumber(value.delay) &&
+    isNullableFiniteNumber(value.iterations) &&
+    isNullableFiniteNumber(value.currentTime) &&
+    isNullableFiniteNumber(value.playbackRate) &&
+    typeof value.infinite === 'boolean' &&
+    isNullableString(value.direction) &&
+    isNullableString(value.fill) &&
+    isNullableString(value.easing) &&
+    isNullableString(value.playState)
+  );
+}
+
+function isMotionKeyframeProperty(value: unknown): boolean {
+  return isRecord(value) && isNonEmptyString(value.name) && isNonEmptyString(value.value);
+}
+
+function isMotionKeyframe(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isFiniteNumber(value.offset) &&
+    value.offset >= 0 &&
+    value.offset <= 1 &&
+    Array.isArray(value.properties) &&
+    value.properties.every(isMotionKeyframeProperty) &&
+    isNullableString(value.easing) &&
+    (value.source === 'computed' || value.source === 'declared')
+  );
+}
+
+function isMotionAnimation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isNonEmptyString(value.id) &&
+    ['css-animation', 'css-transition', 'waapi'].includes(String(value.source)) &&
+    isNullableString(value.name) &&
+    isMotionTarget(value.target) &&
+    isMotionTiming(value.timing) &&
+    Array.isArray(value.keyframes) &&
+    value.keyframes.every(isMotionKeyframe) &&
+    typeof value.replayable === 'boolean'
+  );
+}
+
+function isMotionTransition(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isNonEmptyString(value.id) &&
+    ['declared', 'running', 'observed'].includes(String(value.kind)) &&
+    isMotionTarget(value.target) &&
+    isNonEmptyString(value.property) &&
+    isNullableFiniteNumber(value.duration) &&
+    isNullableFiniteNumber(value.delay) &&
+    isNullableFiniteNumber(value.elapsedTime) &&
+    isNullableString(value.easing) &&
+    isNullableString(value.raw) &&
+    isNullableString(value.before) &&
+    isNullableString(value.after)
+  );
+}
+
+function isMotionKeyframes(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    isNonEmptyString(value.name) &&
+    typeof value.referenced === 'boolean' &&
+    Array.isArray(value.keyframes) &&
+    value.keyframes.every(isMotionKeyframe)
+  );
+}
+
+function isEasingInfo(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (typeof value.value !== 'string') return false;
+  if (!['linear', 'keyword', 'cubic-bezier', 'steps', 'unsupported'].includes(String(value.kind))) return false;
+  if (typeof value.visualizable !== 'boolean') return false;
+  if (value.points === null) return true;
+  return (
+    Array.isArray(value.points) &&
+    value.points.length === 4 &&
+    value.points.every((point) => isFiniteNumber(point))
+  );
+}
+
+export function isMotionSnapshot(value: unknown): value is MotionSnapshot {
+  if (!isRecord(value)) return false;
+  const summary = value.summary;
+  if (!isRecord(summary)) return false;
+  for (const key of [
+    'animationCount',
+    'cssAnimationCount',
+    'transitionCount',
+    'waapiCount',
+    'runningCount',
+    'keyframeSetCount',
+  ]) {
+    if (!isFiniteNumber(summary[key])) return false;
+  }
+  if (typeof summary.reducedMotion !== 'boolean' || !isStringArray(summary.animatedProperties)) return false;
+  if (!Array.isArray(value.animations) || !value.animations.every(isMotionAnimation)) return false;
+  if (!Array.isArray(value.transitions) || !value.transitions.every(isMotionTransition)) return false;
+  if (!Array.isArray(value.keyframes) || !value.keyframes.every(isMotionKeyframes)) return false;
+  if (!Array.isArray(value.easings) || !value.easings.every(isEasingInfo)) return false;
+  if (!isNullableString(value.declaredAnimation) || !isNullableString(value.declaredTransition)) return false;
+  if (!isRecord(value.interaction)) return false;
+  if (
+    typeof value.interaction.hover !== 'boolean' ||
+    typeof value.interaction.focus !== 'boolean' ||
+    typeof value.interaction.active !== 'boolean'
+  ) {
+    return false;
+  }
+  if (!isRecord(value.stylesheetAccess)) return false;
+  if (!isFiniteNumber(value.stylesheetAccess.readable) || !isFiniteNumber(value.stylesheetAccess.inaccessible)) {
+    return false;
+  }
+  if (!isRecord(value.replay)) return false;
+  if (
+    !isNullableString(value.replay.isolatedActiveId) ||
+    !isStringArray(value.replay.liveRestorableIds)
+  ) {
+    return false;
+  }
+  return isStringArray(value.limitations) && isNonEmptyString(value.capturedAt);
+}
+
+export function isMotionReplayAction(value: unknown): value is MotionReplayAction {
+  return (
+    value === 'isolated-start' ||
+    value === 'isolated-stop' ||
+    value === 'live-restart' ||
+    value === 'live-restore'
+  );
 }
 
 function isDimensions(value: unknown): boolean {
@@ -223,6 +384,7 @@ export function isElementSnapshot(value: unknown): value is ElementSnapshot {
   if (!Array.isArray(hierarchy.children) || !hierarchy.children.every(isHierarchyNode)) return false;
   if (hierarchy.previousSibling !== null && !isHierarchyNode(hierarchy.previousSibling)) return false;
   if (hierarchy.nextSibling !== null && !isHierarchyNode(hierarchy.nextSibling)) return false;
+  if (!isMotionSnapshot(value.motion)) return false;
   return isStringArray(value.limitations);
 }
 
@@ -297,6 +459,9 @@ export function isPanelRequest(value: unknown): value is PanelRequest {
     case MessageType.NavigateHierarchy:
       return isHierarchyDirection(value.direction) &&
         (value.index === undefined || (typeof value.index === 'number' && Number.isInteger(value.index)));
+    case MessageType.ReplayMotion:
+      return isMotionReplayAction(value.action) &&
+        (value.animationId === undefined || isNonEmptyString(value.animationId));
     default:
       return false;
   }

@@ -1,5 +1,18 @@
-import { MessageType, isHierarchyDirection, type ContentEvent } from '../shared/messages';
-import type { ElementSnapshot, HierarchyDirection } from '../shared/types';
+import { MessageType, isHierarchyDirection, isMotionReplayAction, type ContentEvent } from '../shared/messages';
+import type {
+  ElementSnapshot,
+  HierarchyDirection,
+  MotionReplayAction,
+  MotionTarget,
+} from '../shared/types';
+import {
+  MOTION_LIMITS,
+  type ObservedAnimationRecord,
+  type RawKeyframeRecord,
+  type RawTimingRecord,
+  type StylesheetReadResult,
+  type TransitionEventRecord,
+} from './motion';
 import { createSnapshot, type SnapshotDeps } from './snapshot';
 
 const HOST_ID = 'pixelpeek-overlay-host';
@@ -91,6 +104,296 @@ function emit(event: ContentEvent): void {
   });
 }
 
+function isNonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function toCssName(value: string): string {
+  const converted = value.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+  return converted.startsWith('webkit-') ? `-${converted}` : converted;
+}
+
+function motionTarget(element: Element, depth = 0): MotionTarget {
+  return {
+    tag: element.tagName.toLowerCase(),
+    id: element.id || null,
+    classes: Array.from(element.classList).slice(0, 6),
+    depth,
+  };
+}
+
+function normalizeAnimationTime(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (value && typeof value === 'object' && 'value' in value) {
+    const nested = (value as { value?: unknown }).value;
+    if (typeof nested === 'number' && Number.isFinite(nested)) return nested;
+  }
+  return null;
+}
+
+function styleEntries(style: CSSStyleDeclaration | undefined): Array<[string, string]> {
+  if (!style) return [];
+  const entries: Array<[string, string]> = [];
+  const limit = Math.min(style.length, MOTION_LIMITS.propertiesPerFrame + 4);
+  for (let index = 0; index < limit; index += 1) {
+    const name = style.item(index);
+    if (!name) continue;
+    entries.push([name, style.getPropertyValue(name)]);
+  }
+  return entries;
+}
+
+function readStylesheets(): StylesheetReadResult {
+  const result: StylesheetReadResult = { readable: 0, inaccessible: 0, keyframes: [] };
+  const seen = new Set<string>();
+  let visited = 0;
+  const keyframesRuleType = typeof CSSRule === 'undefined' ? 7 : CSSRule.KEYFRAMES_RULE;
+  const webkitKeyframesRuleType =
+    typeof CSSRule === 'undefined'
+      ? 12
+      : ((CSSRule as unknown as Record<string, number>).WEBKIT_KEYFRAMES_RULE ?? 12);
+
+  const walk = (rules: CSSRuleList, depth: number): void => {
+    if (depth > MOTION_LIMITS.stylesheetDepth || visited >= MOTION_LIMITS.stylesheetRules) return;
+    for (const rule of Array.from(rules).slice(0, MOTION_LIMITS.stylesheetRules - visited)) {
+      visited += 1;
+      if (rule.type === keyframesRuleType || rule.type === webkitKeyframesRuleType) {
+        const keyframesRule = rule as CSSKeyframesRule;
+        const name = keyframesRule.name?.trim();
+        if (name && !seen.has(name) && result.keyframes.length < MOTION_LIMITS.keyframeSets) {
+          seen.add(name);
+          const frames = Array.from(keyframesRule.cssRules ?? [])
+            .slice(0, MOTION_LIMITS.keyframesPerSet)
+            .map((frame) => {
+              const keyframeRule = frame as CSSKeyframeRule;
+              return {
+                keyText: keyframeRule.keyText || '',
+                declarations: styleEntries(keyframeRule.style),
+              };
+            });
+          result.keyframes.push({ name, frames });
+        }
+        continue;
+      }
+      const nested = (rule as CSSRule & { cssRules?: CSSRuleList }).cssRules;
+      if (nested) walk(nested, depth + 1);
+    }
+  };
+
+  for (const sheet of Array.from(document.styleSheets)) {
+    try {
+      walk(sheet.cssRules, 0);
+      result.readable += 1;
+    } catch {
+      result.inaccessible += 1;
+    }
+  }
+  return result;
+}
+
+function keyframeData(effect: AnimationEffect | null): { raw: RawKeyframeRecord[]; animate: Keyframe[] } {
+  if (!effect || typeof (effect as KeyframeEffect).getKeyframes !== 'function') {
+    return { raw: [], animate: [] };
+  }
+  const frames = (effect as KeyframeEffect).getKeyframes();
+  const raw: RawKeyframeRecord[] = [];
+  const animate: Keyframe[] = [];
+  for (const frame of frames.slice(0, MOTION_LIMITS.keyframesPerSet)) {
+    const withOffset = frame as Keyframe & { computedOffset?: unknown };
+    const computedOffset = withOffset.computedOffset;
+    const offset =
+      typeof computedOffset === 'number' && Number.isFinite(computedOffset)
+        ? computedOffset
+        : typeof frame.offset === 'number' && Number.isFinite(frame.offset)
+          ? frame.offset
+          : null;
+    const easing = typeof frame.easing === 'string' ? frame.easing : null;
+    const declarations: Array<[string, string]> = [];
+    const replay: Record<string, string | number> = {};
+    for (const [name, value] of Object.entries(frame)) {
+      if (name === 'offset' || name === 'easing' || name === 'computedOffset') continue;
+      if (typeof value !== 'string' && typeof value !== 'number') continue;
+      declarations.push([toCssName(name), String(value)]);
+      replay[name] = value;
+    }
+    if (offset !== null) replay.offset = offset;
+    if (easing) replay.easing = easing;
+    raw.push({ offset, declarations, easing });
+    animate.push(replay as Keyframe);
+  }
+  return { raw, animate };
+}
+
+function replayOptions(effect: AnimationEffect | null): KeyframeAnimationOptions {
+  const timing = typeof effect?.getTiming === 'function' ? effect.getTiming() : null;
+  const duration =
+    typeof timing?.duration === 'number' && Number.isFinite(timing.duration)
+      ? Math.max(0, timing.duration)
+      : 0;
+  const iterations =
+    timing?.iterations === Number.POSITIVE_INFINITY
+      ? Number.POSITIVE_INFINITY
+      : Math.max(1, timing?.iterations ?? 1);
+  return {
+    duration,
+    delay: timing?.delay ?? 0,
+    iterations,
+    easing: timing?.easing ?? 'linear',
+    direction: timing?.direction ?? 'normal',
+    fill: 'both',
+  };
+}
+
+function rawTimingRecord(animation: Animation, effect: AnimationEffect | null): RawTimingRecord {
+  const timing = typeof effect?.getTiming === 'function' ? effect.getTiming() : null;
+  const computed = typeof effect?.getComputedTiming === 'function' ? effect.getComputedTiming() : null;
+  const rawIterations = computed?.iterations ?? timing?.iterations ?? 1;
+  const infinite = rawIterations === Number.POSITIVE_INFINITY;
+  const duration =
+    typeof timing?.duration === 'number' && Number.isFinite(timing.duration) ? timing.duration : null;
+  return {
+    duration,
+    delay: timing?.delay ?? null,
+    iterations: infinite ? null : rawIterations,
+    infinite,
+    direction: timing?.direction ?? null,
+    fill: timing?.fill ?? null,
+    easing: timing?.easing ?? computed?.easing ?? null,
+    playState: animation.playState ?? null,
+    currentTime: normalizeAnimationTime(animation.currentTime),
+    playbackRate: Number.isFinite(animation.playbackRate) ? animation.playbackRate : null,
+  };
+}
+
+function animationRecord(
+  animation: Animation,
+  element: Element,
+  depth: number,
+  id: string,
+): ObservedAnimationRecord | null {
+  const effect = animation.effect ?? null;
+  if (!effect) return null;
+  const frames = keyframeData(effect);
+  const candidate = animation as Animation & { animationName?: unknown; transitionProperty?: unknown };
+  const animationName = typeof candidate.animationName === 'string' ? candidate.animationName : null;
+  const transitionProperty =
+    typeof candidate.transitionProperty === 'string' ? candidate.transitionProperty : null;
+  if (frames.animate.length) {
+    replayables.set(id, {
+      animation,
+      target: element,
+      keyframes: frames.animate,
+      options: replayOptions(effect),
+    });
+  }
+  return {
+    id,
+    target: motionTarget(element, depth),
+    animationName,
+    transitionProperty,
+    timing: rawTimingRecord(animation, effect),
+    keyframes: frames.raw,
+  };
+}
+
+function readAnimations(element: Element): ObservedAnimationRecord[] {
+  replayables = new Map();
+  const seen = new Set<Animation>();
+  const records: ObservedAnimationRecord[] = [];
+  const nodes: Array<{ element: Element; depth: number }> = [{ element, depth: 0 }];
+  let index = 0;
+
+  while (
+    index < nodes.length &&
+    nodes.length < MOTION_LIMITS.descendantNodes &&
+    records.length < MOTION_LIMITS.animations
+  ) {
+    const current = nodes[index]!;
+    index += 1;
+    const getter = (current.element as Element & { getAnimations?: () => Animation[] }).getAnimations;
+    if (typeof getter !== 'function') continue;
+    let list: Animation[] = [];
+    try {
+      list = getter.call(current.element) ?? [];
+    } catch {
+      continue;
+    }
+    for (const animation of list) {
+      if (seen.has(animation) || isolatedAnimations.has(animation)) continue;
+      seen.add(animation);
+      const record = animationRecord(
+        animation,
+        current.element,
+        current.depth,
+        `a${records.length + 1}`,
+      );
+      if (!record) continue;
+      records.push(record);
+      if (records.length >= MOTION_LIMITS.animations) break;
+    }
+    if (current.depth >= MOTION_LIMITS.descendantDepth) continue;
+    const remaining = MOTION_LIMITS.descendantNodes - nodes.length;
+    for (const child of Array.from(current.element.children).slice(0, Math.max(0, remaining))) {
+      nodes.push({ element: child, depth: current.depth + 1 });
+    }
+  }
+  return records;
+}
+
+function onTransitionChange(event: TransitionEvent): void {
+  const target = event.target;
+  if (!(target instanceof Element) || isIgnored(target)) return;
+  const phases: Record<string, TransitionEventRecord['phase']> = {
+    transitionrun: 'run',
+    transitionstart: 'start',
+    transitionend: 'end',
+    transitioncancel: 'cancel',
+  };
+  transitionLog.push({
+    target,
+    property: event.propertyName,
+    elapsed: event.elapsedTime,
+    phase: phases[event.type] ?? 'run',
+    at: new Date().toISOString(),
+  });
+  if (transitionLog.length > MOTION_LIMITS.transitionEvents * 2) {
+    transitionLog = transitionLog.slice(-MOTION_LIMITS.transitionEvents);
+  }
+}
+
+function prefersReducedMotion(): boolean {
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
+}
+
+function interactionState(element: Element): { hover: boolean; focus: boolean; active: boolean } {
+  const style = snapshotDeps.computedStyle(element);
+  const matches = (selector: string): boolean => {
+    try {
+      return element.matches(selector);
+    } catch {
+      return false;
+    }
+  };
+  return {
+    hover: matches(':hover') || style.getPropertyValue('cursor').trim() === 'pointer',
+    focus: matches(':focus') || document.activeElement === element,
+    active: matches(':active'),
+  };
+}
+
+function isRelatedElement(element: Element): boolean {
+  if (!selected) return false;
+  return element === selected || selected.contains(element) || element.contains(selected);
+}
+
+function motionState(): { isolatedActiveId: string | null; liveRestorableIds: string[] } {
+  return { isolatedActiveId, liveRestorableIds: Array.from(liveStates.keys()) };
+}
+
 const snapshotDeps: SnapshotDeps = {
   computedStyle: (element) => element.ownerDocument.defaultView!.getComputedStyle(element),
   parentStyle: (element) => element.ownerDocument.defaultView!.getComputedStyle(element),
@@ -107,12 +410,132 @@ const snapshotDeps: SnapshotDeps = {
       depth,
     }),
   },
+  motion: {
+    computedStyle: (element) => element.ownerDocument.defaultView!.getComputedStyle(element),
+    readStylesheets,
+    readAnimations,
+    readTransitionEvents: () => transitionLog.slice(),
+    reducedMotion: prefersReducedMotion,
+    interaction: interactionState,
+    targetMeta: motionTarget,
+    isRelated: isRelatedElement,
+    now: () => new Date().toISOString(),
+    replayState: motionState,
+  },
 };
+
+interface ReplayableAnimation {
+  animation: Animation;
+  target: Element;
+  keyframes: Keyframe[];
+  options: KeyframeAnimationOptions;
+}
+
+interface LiveReplayState {
+  animation: Animation;
+  currentTime: number | null;
+  playbackRate: number;
+  playState: AnimationPlayState;
+}
 
 let active = false;
 let overlay: Overlay | null = null;
 let highlighted: Element | null = null;
 let selected: Element | null = null;
+let selectionObserver: MutationObserver | null = null;
+let replayables = new Map<string, ReplayableAnimation>();
+let isolatedAnimations = new Set<Animation>();
+let isolatedActiveId: string | null = null;
+let liveStates = new Map<string, LiveReplayState>();
+let transitionLog: TransitionEventRecord[] = [];
+
+function stopIsolated(): void {
+  for (const animation of isolatedAnimations) {
+    try {
+      animation.cancel();
+    } catch {
+      isolatedAnimations.delete(animation);
+    }
+  }
+  isolatedAnimations.clear();
+  isolatedActiveId = null;
+}
+
+function restoreLiveState(id?: string): void {
+  const ids = id ? [id] : Array.from(liveStates.keys());
+  for (const key of ids) {
+    const state = liveStates.get(key);
+    if (!state) continue;
+    try {
+      const animation = replayables.get(key)?.animation ?? state.animation;
+      animation.updatePlaybackRate(state.playbackRate);
+      if (state.currentTime !== null) animation.currentTime = state.currentTime;
+      if (state.playState === 'paused') animation.pause();
+      else void animation.play();
+    } catch {
+      liveStates.delete(key);
+    }
+    liveStates.delete(key);
+  }
+}
+
+function cleanupReplay(): void {
+  stopIsolated();
+  restoreLiveState();
+  replayables = new Map();
+}
+
+function replayMotion(action: MotionReplayAction, animationId?: string): void {
+  if (action === 'isolated-stop') {
+    stopIsolated();
+    return;
+  }
+  if (action === 'live-restore') {
+    restoreLiveState(animationId);
+    return;
+  }
+
+  let targetId: string | undefined = animationId;
+  if (!targetId) {
+    targetId = Array.from(replayables.entries()).find(([, handle]) => handle.keyframes.length > 0)?.[0];
+  }
+  if (!targetId) throw new Error('No replayable animation was found for this selection.');
+  const handle = replayables.get(targetId);
+  if (!handle || !handle.keyframes.length) {
+    throw new Error('That animation cannot be replayed.');
+  }
+
+  if (action === 'live-restart') {
+    if (!handle.animation.effect) throw new Error('The original animation is no longer available.');
+    if (!liveStates.has(targetId)) {
+      liveStates.set(targetId, {
+        animation: handle.animation,
+        currentTime: normalizeAnimationTime(handle.animation.currentTime),
+        playbackRate: handle.animation.playbackRate,
+        playState: handle.animation.playState,
+      });
+    }
+    handle.animation.currentTime = 0;
+    handle.animation.play();
+    return;
+  }
+
+  stopIsolated();
+  const clone = handle.target.animate(handle.keyframes, handle.options);
+  isolatedAnimations.add(clone);
+  isolatedActiveId = targetId;
+}
+
+function observeSelection(): void {
+  selectionObserver?.disconnect();
+  if (typeof MutationObserver === 'undefined') return;
+  selectionObserver = new MutationObserver(() => {
+    if (selected && !selected.isConnected) {
+      clearSelection('element was removed from the page');
+    }
+  });
+  selectionObserver.observe(document.documentElement, { childList: true, subtree: true });
+}
 
 function hideHighlight(): void {
   highlighted = null;
@@ -162,6 +585,9 @@ function positionOverlay(rect: DOMRect): void {
 }
 
 function clearSelection(reason: string): void {
+  selectionObserver?.disconnect();
+  selectionObserver = null;
+  cleanupReplay();
   selected = null;
   emit({ type: MessageType.SelectionCleared, payload: { reason } });
   hideHighlight();
@@ -169,9 +595,11 @@ function clearSelection(reason: string): void {
   overlay = null;
 }
 
-function capture(element: Element): ElementSnapshot {
+function capture(element: Element, resetReplay = false): ElementSnapshot {
+  if (resetReplay) cleanupReplay();
   const snapshot = createSnapshot(element, snapshotDeps);
   selected = element;
+  observeSelection();
   emit({ type: MessageType.ElementSelected, payload: snapshot.element });
   emit({ type: MessageType.SnapshotChanged, payload: snapshot });
   return snapshot;
@@ -208,7 +636,7 @@ function onClick(event: MouseEvent): void {
   event.stopImmediatePropagation();
 
   try {
-    capture(target);
+    capture(target, true);
   } catch (error) {
     emit({
       type: MessageType.RuntimeError,
@@ -245,20 +673,30 @@ function start(): void {
   if (!overlay) return;
   active = true;
   highlighted = null;
+  transitionLog = [];
   doc.addEventListener('mousemove', onMove, true);
   doc.addEventListener('click', onClick, true);
   doc.addEventListener('keydown', onKeyDown, true);
+  doc.addEventListener('transitionrun', onTransitionChange, true);
+  doc.addEventListener('transitionstart', onTransitionChange, true);
+  doc.addEventListener('transitionend', onTransitionChange, true);
+  doc.addEventListener('transitioncancel', onTransitionChange, true);
   window.addEventListener('blur', onBlur, true);
   window.addEventListener('pagehide', onPageHide, true);
   emit({ type: MessageType.StateChanged, payload: { tabId: null, active: true } });
 }
 
 function stop(options: { clearSelection?: boolean } = {}): void {
+  cleanupReplay();
   if (!active) return;
   active = false;
   document.removeEventListener('mousemove', onMove, true);
   document.removeEventListener('click', onClick, true);
   document.removeEventListener('keydown', onKeyDown, true);
+  document.removeEventListener('transitionrun', onTransitionChange, true);
+  document.removeEventListener('transitionstart', onTransitionChange, true);
+  document.removeEventListener('transitionend', onTransitionChange, true);
+  document.removeEventListener('transitioncancel', onTransitionChange, true);
   window.removeEventListener('blur', onBlur, true);
   window.removeEventListener('pagehide', onPageHide, true);
   highlighted = null;
@@ -310,6 +748,37 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
       }
       return false;
     }
+    case MessageType.ReplayMotion: {
+      const action = (message as { action?: unknown }).action;
+      if (!isMotionReplayAction(action)) {
+        sendResponse({ ok: false, error: 'Unknown replay action.', errorCode: 'invalid-replay-action' });
+        return false;
+      }
+      if (!selected) {
+        sendResponse({ ok: false, error: 'No element is selected.', errorCode: 'no-selection' });
+        return false;
+      }
+      if (!selected.isConnected) {
+        clearSelection('element was removed from the page');
+        sendResponse({ ok: false, error: 'The selected element is no longer in the page.', errorCode: 'detached' });
+        return false;
+      }
+      const animationIdValue = (message as { animationId?: unknown }).animationId;
+      const animationId = isNonEmpty(animationIdValue) ? animationIdValue : undefined;
+      try {
+        replayMotion(action, animationId);
+        capture(selected);
+        sendResponse({ ok: true });
+      } catch (error) {
+        cleanupReplay();
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          errorCode: 'replay-failed',
+        });
+      }
+      return false;
+    }
     case MessageType.NavigateHierarchy: {
       const directionValue = (message as { direction?: unknown }).direction;
       if (!isHierarchyDirection(directionValue)) {
@@ -333,7 +802,7 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
         return false;
       }
       try {
-        capture(target);
+        capture(target, true);
         if (!active) showSelection(target);
         sendResponse({ ok: true });
       } catch (error) {

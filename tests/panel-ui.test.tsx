@@ -3,9 +3,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AgentPromptsView } from '../src/panel/components/AgentPromptsView';
 import { Inspector } from '../src/panel/components/Inspector';
+import { MotionWorkspace } from '../src/panel/components/MotionWorkspace';
 import { Sidebar } from '../src/panel/components/Sidebar';
 import { getPanelMetrics } from '../src/panel/hooks/usePanelWidth';
 import type { ElementInfo, ElementSnapshot } from '../src/shared/types';
+import { makeMotionSnapshot } from './fixtures';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -62,6 +64,7 @@ const snapshot: ElementSnapshot = {
   colors: [],
   gradients: [],
   hierarchy: { parent: null, children: [], previousSibling: null, nextSibling: null },
+  motion: makeMotionSnapshot(),
   limitations: [],
   capturedAt: 'fixed',
 };
@@ -168,11 +171,36 @@ describe('panel UI at narrow widths', () => {
   });
 
   it('generates a prompt from the selected reference in the workspace', () => {
-    render(<AgentPromptsView element={element} metrics={getPanelMetrics(360)} />);
+    render(<AgentPromptsView element={element} snapshot={snapshot} metrics={getPanelMetrics(360)} />);
     const textarea = container.querySelector('textarea')!;
     expect(textarea.value).toContain('## 1. Objective');
     expect(textarea.value).toContain('- Tag: button');
     expect(container.textContent).toContain('Selected reference');
     expect(container.textContent).toContain('Copy prompt');
+  });
+
+  it('renders the Phase 3 motion workspace and replay controls', () => {
+    render(
+      <MotionWorkspace
+        snapshot={snapshot}
+        metrics={getPanelMetrics(320)}
+        copiedKey={null}
+        error={null}
+        onCopyText={() => {}}
+        onReplay={() => {}}
+      />,
+    );
+    expect(container.textContent).toContain('Anim');
+    expect(container.textContent).toContain('Trans');
+    expect(container.textContent).toContain('Frames');
+    expect(container.textContent).toContain('Ease');
+    expect(container.textContent).toContain('Play');
+    const replayTab = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Play' && button.getAttribute('role') === 'tab',
+    )!;
+    act(() => replayTab.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(container.textContent).toContain('Isolated replay');
+    expect(container.textContent).toContain('Restart original');
+    expect(container.textContent).toContain('Restore original');
   });
 });

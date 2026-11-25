@@ -50,6 +50,11 @@ export function renderPrompt(model: PromptModel, mode: OutputMode): string {
     reference.push(`Not detected (do not guess): ${model.notDetected.join(', ')}`);
   }
 
+  const animation = detectedLines(model, 'Animation and interaction');
+  if (model.unavailableMotion.length) {
+    animation.push(`Unavailable motion data (do not guess): ${model.unavailableMotion.join(', ')}`);
+  }
+
   const sections: PromptSection[] = [
     {
       title: 'Objective',
@@ -63,7 +68,7 @@ export function renderPrompt(model: PromptModel, mode: OutputMode): string {
     { title: 'Visual styling', lines: detectedLines(model, 'Visual styling') },
     { title: 'Typography', lines: detectedLines(model, 'Typography') },
     { title: 'Spacing and dimensions', lines: detectedLines(model, 'Spacing and dimensions') },
-    { title: 'Animation and interaction', lines: detectedLines(model, 'Animation and interaction') },
+    { title: 'Animation and interaction', lines: animation },
     {
       title: 'Responsive expectations',
       lines: inferredLines([

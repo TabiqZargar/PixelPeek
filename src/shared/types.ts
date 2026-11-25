@@ -167,6 +167,118 @@ export interface HierarchySnapshot {
   nextSibling: HierarchyNode | null;
 }
 
+export type MotionSource = 'css-animation' | 'css-transition' | 'waapi';
+export type MotionTransitionKind = 'declared' | 'running' | 'observed';
+
+export interface MotionTarget {
+  tag: string;
+  id: string | null;
+  classes: string[];
+  depth: number;
+}
+
+export interface MotionTiming {
+  duration: number | null;
+  delay: number | null;
+  iterations: number | null;
+  infinite: boolean;
+  direction: string | null;
+  fill: string | null;
+  easing: string | null;
+  playState: string | null;
+  currentTime: number | null;
+  playbackRate: number | null;
+}
+
+export interface MotionKeyframeProperty {
+  name: string;
+  value: string;
+}
+
+export interface MotionKeyframe {
+  offset: number;
+  properties: MotionKeyframeProperty[];
+  easing: string | null;
+  source: 'computed' | 'declared';
+}
+
+export interface MotionAnimation {
+  id: string;
+  source: MotionSource;
+  name: string | null;
+  target: MotionTarget;
+  timing: MotionTiming;
+  keyframes: MotionKeyframe[];
+  replayable: boolean;
+}
+
+export interface MotionTransition {
+  id: string;
+  kind: MotionTransitionKind;
+  target: MotionTarget;
+  property: string;
+  duration: number | null;
+  delay: number | null;
+  easing: string | null;
+  raw: string | null;
+  before: string | null;
+  after: string | null;
+  elapsedTime: number | null;
+}
+
+export interface MotionKeyframes {
+  name: string;
+  referenced: boolean;
+  keyframes: MotionKeyframe[];
+}
+
+export type EasingKind = 'linear' | 'keyword' | 'cubic-bezier' | 'steps' | 'unsupported';
+
+export interface EasingInfo {
+  value: string;
+  kind: EasingKind;
+  points: [number, number, number, number] | null;
+  visualizable: boolean;
+}
+
+export interface MotionSummary {
+  animationCount: number;
+  cssAnimationCount: number;
+  transitionCount: number;
+  waapiCount: number;
+  runningCount: number;
+  keyframeSetCount: number;
+  reducedMotion: boolean;
+  animatedProperties: string[];
+}
+
+export interface MotionSnapshot {
+  summary: MotionSummary;
+  animations: MotionAnimation[];
+  transitions: MotionTransition[];
+  keyframes: MotionKeyframes[];
+  easings: EasingInfo[];
+  declaredAnimation: string | null;
+  declaredTransition: string | null;
+  interaction: {
+    hover: boolean;
+    focus: boolean;
+    active: boolean;
+  };
+  stylesheetAccess: {
+    readable: number;
+    inaccessible: number;
+  };
+  replay: {
+    isolatedActiveId: string | null;
+    liveRestorableIds: string[];
+  };
+  limitations: string[];
+  capturedAt: string;
+}
+
+export type MotionReplayAction = 'isolated-start' | 'isolated-stop' | 'live-restart' | 'live-restore';
+
 export interface ElementSnapshot {
   element: ElementInfo;
   boxModel: BoxModel;
@@ -175,6 +287,7 @@ export interface ElementSnapshot {
   colors: ColorEntry[];
   gradients: GradientInfo[];
   hierarchy: HierarchySnapshot;
+  motion: MotionSnapshot;
   limitations: string[];
   capturedAt: string;
 }

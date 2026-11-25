@@ -56,6 +56,23 @@ describe('snapshot orchestration', () => {
           depth,
         }),
       },
+      motion: {
+        computedStyle: () => style(values),
+        readStylesheets: () => ({ readable: 1, inaccessible: 0, keyframes: [] }),
+        readAnimations: () => [],
+        readTransitionEvents: () => [],
+        reducedMotion: () => false,
+        interaction: () => ({ hover: false, focus: false, active: false }),
+        targetMeta: (node: Element, depth = 0) => ({
+          tag: node.tagName.toLowerCase(),
+          id: node.id || null,
+          classes: Array.from(node.classList),
+          depth,
+        }),
+        isRelated: () => true,
+        now: () => 'fixed-time',
+        replayState: () => ({ isolatedActiveId: null, liveRestorableIds: [] }),
+      },
     };
 
     const snapshot = createSnapshot(element, deps);

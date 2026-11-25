@@ -6,6 +6,7 @@ import {
   navigateHierarchy,
   hasRuntime,
   pingTab,
+  replayMotion,
   sendToBackground,
   sendToTab,
 } from '../src/shared/transport';
@@ -87,6 +88,17 @@ describe('Phase 2 transport helpers', () => {
       type: MessageType.NavigateHierarchy,
       direction: 'child',
       index: 1,
+    });
+  });
+
+  it('sends replay actions through the typed contract', async () => {
+    const { runtime } = stubChrome();
+    runtime.sendMessage.mockResolvedValue({ ok: true });
+    await expect(replayMotion('isolated-start', 'a1')).resolves.toEqual({ ok: true });
+    expect(runtime.sendMessage).toHaveBeenLastCalledWith({
+      type: MessageType.ReplayMotion,
+      action: 'isolated-start',
+      animationId: 'a1',
     });
   });
 });

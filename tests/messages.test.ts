@@ -5,6 +5,8 @@ import {
   isElementInfo,
   isElementSnapshot,
   isInspectionState,
+  isMotionReplayAction,
+  isMotionSnapshot,
   isPanelEvent,
   isPanelRequest,
   isRequestResult,
@@ -105,5 +107,28 @@ describe('Phase 2 message guards', () => {
     expect(isPanelRequest({ type: MessageType.NavigateHierarchy, direction: 'sideways' })).toBe(false);
     expect(isRequestResult({ ok: false, errorCode: 'no-selection' })).toBe(true);
     expect(isInspectionState({ tabId: 4, active: true, lastTabId: 4 })).toBe(true);
+  });
+});
+
+describe('Phase 3 message guards', () => {
+  it('validates motion snapshots and replay actions', () => {
+    const snapshot = makeSnapshot();
+    expect(isMotionSnapshot(snapshot.motion)).toBe(true);
+    expect(isElementSnapshot({ ...snapshot, motion: { ...snapshot.motion, summary: {} } })).toBe(false);
+    expect(isMotionReplayAction('isolated-start')).toBe(true);
+    expect(isMotionReplayAction('live-restore')).toBe(true);
+    expect(isMotionReplayAction('delete-page')).toBe(false);
+  });
+
+  it('validates replay requests through the panel contract', () => {
+    expect(
+      isPanelRequest({
+        type: MessageType.ReplayMotion,
+        action: 'isolated-start',
+        animationId: 'a1',
+      }),
+    ).toBe(true);
+    expect(isPanelRequest({ type: MessageType.ReplayMotion, action: 'unknown' })).toBe(false);
+    expect(isPanelRequest({ type: MessageType.ReplayMotion, action: 'live-restart', animationId: 4 })).toBe(false);
   });
 });

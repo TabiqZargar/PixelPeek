@@ -5,6 +5,7 @@ import { extractCssProperties } from './css-properties';
 import { extractGradients } from './gradient';
 import { extractHierarchy, type HierarchyDeps } from './hierarchy';
 import { extractElementInfo } from './inspect';
+import { extractMotion, type MotionDeps } from './motion';
 import { extractTypography } from './typography';
 
 export interface SnapshotDeps {
@@ -12,6 +13,7 @@ export interface SnapshotDeps {
   parentStyle: (element: Element) => CSSStyleDeclaration | null;
   boundingRect: (element: Element) => DOMRect;
   hierarchy: HierarchyDeps;
+  motion: MotionDeps;
   now?: () => string;
 }
 
@@ -73,6 +75,7 @@ export function createSnapshot(element: Element, deps: SnapshotDeps): ElementSna
     colors: extractColors(style),
     gradients: extractGradients(read('background-image')),
     hierarchy: extractHierarchy(element, deps.hierarchy),
+    motion: extractMotion(element, deps.motion),
     limitations: [
       'Values are computed styles, not the original authored CSS declarations.',
       'CSS variables, source stylesheets and cascade origins are not reconstructed.',

@@ -16,6 +16,7 @@ export interface PromptModel {
   element: ElementInfo;
   groups: DetectedGroup[];
   notDetected: string[];
+  unavailableMotion: string[];
   inferred: string[];
 }
 

@@ -1,7 +1,7 @@
 import { Icon, type IconName } from './Icon';
 import type { PanelMetrics } from '../hooks/usePanelWidth';
 
-export type View = 'inspector' | 'agent-prompts' | 'settings';
+export type View = 'inspector' | 'motion' | 'agent-prompts' | 'settings';
 
 interface Props {
   view: View;
@@ -20,7 +20,7 @@ interface NavItem {
 const workspace: NavItem[] = [
   { label: 'Inspector', icon: 'crosshair', view: 'inspector' },
   { label: 'Design System', icon: 'layers', disabled: true },
-  { label: 'Motion', icon: 'motion', disabled: true },
+  { label: 'Motion', icon: 'motion', view: 'motion' },
   { label: 'Layout', icon: 'layout', disabled: true },
   { label: 'Saved Blueprints', icon: 'bookmark', disabled: true },
 ];

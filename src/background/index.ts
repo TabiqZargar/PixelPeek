@@ -1,13 +1,14 @@
 import {
   MessageType,
   isHierarchyDirection,
+  isMotionReplayAction,
   type ContentEvent,
   type ContentRequest,
   type PanelEvent,
   type RequestResult,
   type StateResult,
 } from '../shared/messages';
-import { IDLE_STATE, type HierarchyDirection, type InspectionState } from '../shared/types';
+import { IDLE_STATE, type HierarchyDirection, type InspectionState, type MotionReplayAction } from '../shared/types';
 import { describeMessageError, isInspectableUrl } from '../shared/tabs';
 import { pingTab, sendToTab } from '../shared/transport';
 
@@ -187,6 +188,23 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
       type: MessageType.NavigateHierarchy,
       direction,
       ...(typeof index === 'number' && Number.isInteger(index) ? { index } : {}),
+    }).then(sendResponse);
+    return true;
+  }
+  if (type === MessageType.ReplayMotion) {
+    if (!isMotionReplayAction((message as { action?: unknown }).action)) {
+      sendResponse({
+        ok: false,
+        error: 'Unknown replay action.',
+        errorCode: 'invalid-replay-action',
+      });
+      return true;
+    }
+    const { action, animationId } = message as { action: MotionReplayAction; animationId?: unknown };
+    void forwardToContent({
+      type: MessageType.ReplayMotion,
+      action,
+      ...(typeof animationId === 'string' && animationId.trim() ? { animationId } : {}),
     }).then(sendResponse);
     return true;
   }

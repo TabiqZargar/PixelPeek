@@ -5,6 +5,7 @@ import {
   getSnapshot,
   navigateHierarchy,
   onPanelEvent,
+  replayMotion,
   sendToBackground,
 } from '../../shared/transport';
 import type {
@@ -12,6 +13,7 @@ import type {
   ElementSnapshot,
   HierarchyDirection,
   InspectorStatus,
+  MotionReplayAction,
 } from '../../shared/types';
 import { serializeCss, serializeSnapshotCss } from '../../content/css';
 import { writeClipboard } from '../clipboard';
@@ -113,6 +115,17 @@ export function useInspector() {
     return ok;
   }, []);
 
+  const replay = useCallback(async (action: MotionReplayAction, animationId?: string) => {
+    setError(null);
+    try {
+      await replayMotion(action, animationId);
+      return true;
+    } catch (cause) {
+      setError(describe(cause));
+      return false;
+    }
+  }, []);
+
   const copyCss = useCallback(async () => {
     if (!element) return false;
     const css = snapshot ? serializeSnapshotCss(snapshot) : serializeCss(element);
@@ -129,6 +142,7 @@ export function useInspector() {
     start,
     stop,
     navigate,
+    replay,
     copyText,
     copyCss,
   };

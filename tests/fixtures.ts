@@ -1,4 +1,4 @@
-import type { ElementInfo, ElementSnapshot } from '../src/shared/types';
+import type { ElementInfo, ElementSnapshot, MotionSnapshot } from '../src/shared/types';
 
 export function makeElementInfo(overrides: Partial<ElementInfo> = {}): ElementInfo {
   return {
@@ -19,6 +19,104 @@ export function makeElementInfo(overrides: Partial<ElementInfo> = {}): ElementIn
     position: 'relative',
     capturedAt: '2026-01-01T00:00:00.000Z',
     sourceUrl: 'https://example.com/',
+    ...overrides,
+  };
+}
+
+export function makeMotionSnapshot(overrides: Partial<MotionSnapshot> = {}): MotionSnapshot {
+  const target = { tag: 'button', id: 'cta', classes: ['primary', 'large'], depth: 1 };
+  return {
+    summary: {
+      animationCount: 1,
+      cssAnimationCount: 1,
+      transitionCount: 1,
+      waapiCount: 0,
+      runningCount: 1,
+      keyframeSetCount: 1,
+      reducedMotion: false,
+      animatedProperties: ['opacity', 'transform'],
+    },
+    animations: [
+      {
+        id: 'a1',
+        source: 'css-animation',
+        name: 'pulse',
+        target,
+        timing: {
+          duration: 1200,
+          delay: 0,
+          iterations: null,
+          infinite: true,
+          direction: 'normal',
+          fill: 'none',
+          easing: 'ease-in-out',
+          playState: 'running',
+          currentTime: 300,
+          playbackRate: 1,
+        },
+        keyframes: [
+          {
+            offset: 0,
+            properties: [{ name: 'opacity', value: '1' }],
+            easing: null,
+            source: 'computed',
+          },
+          {
+            offset: 1,
+            properties: [{ name: 'opacity', value: '0.5' }],
+            easing: null,
+            source: 'computed',
+          },
+        ],
+        replayable: true,
+      },
+    ],
+    transitions: [
+      {
+        id: 'declared-1',
+        kind: 'declared',
+        target,
+        property: 'transform',
+        duration: 200,
+        delay: 0,
+        easing: 'ease',
+        raw: 'transform 200ms ease',
+        before: null,
+        after: null,
+        elapsedTime: null,
+      },
+    ],
+    keyframes: [
+      {
+        name: 'pulse',
+        referenced: true,
+        keyframes: [
+          {
+            offset: 0,
+            properties: [{ name: 'opacity', value: '1' }],
+            easing: null,
+            source: 'declared',
+          },
+          {
+            offset: 1,
+            properties: [{ name: 'opacity', value: '0.5' }],
+            easing: null,
+            source: 'declared',
+          },
+        ],
+      },
+    ],
+    easings: [
+      { value: 'ease-in-out', kind: 'keyword', points: [0.42, 0, 0.58, 1], visualizable: true },
+      { value: 'ease', kind: 'keyword', points: [0.25, 0.1, 0.25, 1], visualizable: true },
+    ],
+    declaredAnimation: 'pulse 1200ms ease-in-out infinite',
+    declaredTransition: 'transform 200ms ease',
+    interaction: { hover: false, focus: false, active: false },
+    stylesheetAccess: { readable: 1, inaccessible: 0 },
+    replay: { isolatedActiveId: null, liveRestorableIds: [] },
+    limitations: [],
+    capturedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -80,6 +178,7 @@ export function makeSnapshot(overrides: Partial<ElementSnapshot> = {}): ElementS
       previousSibling: null,
       nextSibling: { tag: 'a', id: 'link', classes: [], depth: 1 },
     },
+    motion: makeMotionSnapshot(),
     limitations: ['computed values only'],
     capturedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,

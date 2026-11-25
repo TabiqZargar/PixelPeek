@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildPromptModel, renderPrompt, type OutputMode } from '../src/panel/prompts';
 import type { ElementInfo } from '../src/shared/types';
+import { makeMotionSnapshot } from './fixtures';
 
 const captured: ElementInfo = {
   tag: 'button',
@@ -117,5 +118,36 @@ describe('prompt generator', () => {
     expect(prompt).toContain('No values detected for this category. Do not invent any.');
     expect(prompt).not.toContain('undefined');
     expect(prompt).not.toContain('null');
+  });
+});
+
+describe('motion prompt facts', () => {
+  it('uses verified motion values without turning guidance into measurements', () => {
+    const prompt = renderPrompt(buildPromptModel(captured, makeMotionSnapshot()), 'react-css');
+    expect(prompt).toContain('- Declared animation: pulse 1200ms ease-in-out infinite');
+    expect(prompt).toContain('- Animated properties: opacity · transform');
+    expect(prompt).toContain('- Keyframe sets: pulse');
+    expect(prompt).toContain('Inferred guidance (not measured):');
+    expect(prompt).toContain('Do not infer animation triggers');
+  });
+
+  it('labels missing motion data as unavailable rather than inventing it', () => {
+    const motion = makeMotionSnapshot();
+    const prompt = renderPrompt(
+      buildPromptModel(captured, {
+        ...motion,
+        declaredAnimation: null,
+        declaredTransition: null,
+        animations: [],
+        transitions: [],
+        keyframes: [],
+        easings: [],
+      }),
+      'html-css',
+    );
+    expect(prompt).toContain(
+      'Unavailable motion data (do not guess): declared animation, declared transition, authored keyframes, easing functions',
+    );
+    expect(prompt).not.toContain('- Declared animation:');
   });
 });

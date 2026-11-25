@@ -3,6 +3,7 @@ import { usePanelMetrics } from './hooks/usePanelMetrics';
 import { useInspector } from './hooks/useInspector';
 import { AgentPromptsView } from './components/AgentPromptsView';
 import { Inspector } from './components/Inspector';
+import { MotionWorkspace } from './components/MotionWorkspace';
 import { SettingsView } from './components/SettingsView';
 import { Sidebar, type View } from './components/Sidebar';
 
@@ -19,6 +20,7 @@ export function App() {
     start,
     stop,
     navigate,
+    replay,
     copyText,
     copyCss,
   } = useInspector();
@@ -47,7 +49,19 @@ export function App() {
           onCopyCss={() => void copyCss()}
         />
       )}
-      {view === 'agent-prompts' && <AgentPromptsView element={element} metrics={metrics} />}
+      {view === 'motion' && (
+        <MotionWorkspace
+          snapshot={snapshot}
+          metrics={metrics}
+          copiedKey={copiedKey}
+          error={error}
+          onCopyText={(text, key) => void copyText(text, key)}
+          onReplay={(action, animationId) => void replay(action, animationId)}
+        />
+      )}
+      {view === 'agent-prompts' && (
+        <AgentPromptsView element={element} snapshot={snapshot} metrics={metrics} />
+      )}
       {view === 'settings' && <SettingsView metrics={metrics} />}
     </div>
   );

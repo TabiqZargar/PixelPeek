@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ElementInfo } from '../../shared/types';
+import type { ElementInfo, ElementSnapshot } from '../../shared/types';
 import { writeClipboard } from '../clipboard';
 import type { PanelMetrics } from '../hooks/usePanelWidth';
 import { Icon } from './Icon';
@@ -7,10 +7,11 @@ import { buildPromptModel, outputModes, renderPrompt, type OutputMode } from '..
 
 interface Props {
   element: ElementInfo | null;
+  snapshot: ElementSnapshot | null;
   metrics: PanelMetrics;
 }
 
-export function AgentPromptsView({ element, metrics }: Props) {
+export function AgentPromptsView({ element, snapshot, metrics }: Props) {
   const [mode, setMode] = useState<OutputMode>('react-css');
   const [prompt, setPrompt] = useState('');
   const [copied, setCopied] = useState(false);
@@ -18,7 +19,10 @@ export function AgentPromptsView({ element, metrics }: Props) {
   const padding = metrics.contentPadding;
   const compact = metrics.layout === 'compact';
 
-  const generated = useMemo(() => (element ? renderPrompt(buildPromptModel(element), mode) : ''), [element, mode]);
+  const generated = useMemo(
+    () => (element ? renderPrompt(buildPromptModel(element, snapshot?.motion ?? null), mode) : ''),
+    [element, snapshot, mode],
+  );
 
   useEffect(() => {
     setPrompt(generated);
