@@ -1,15 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MessageType } from '../src/shared/messages';
 import {
+  extractDesignSystem,
   getInspectionState,
   getSnapshot,
   navigateHierarchy,
   hasRuntime,
+  onPanelEvent,
   pingTab,
   replayMotion,
   sendToBackground,
   sendToTab,
 } from '../src/shared/transport';
+import { makeDesignSystemSnapshot } from './fixtures';
 
 function stubChrome(overrides: Record<string, unknown> = {}) {
   const runtime = {
@@ -100,5 +103,39 @@ describe('Phase 2 transport helpers', () => {
       action: 'isolated-start',
       animationId: 'a1',
     });
+  });
+});
+
+describe('Phase 4 design-system transport', () => {
+  it('sends bounded extract requests through the typed contract', async () => {
+    const { runtime } = stubChrome();
+    runtime.sendMessage.mockResolvedValue({ ok: true });
+    await expect(extractDesignSystem('ds-1')).resolves.toEqual({ ok: true });
+    expect(runtime.sendMessage).toHaveBeenCalledWith({
+      type: MessageType.ExtractDesignSystem,
+      requestId: 'ds-1',
+    });
+  });
+
+  it('rejects unbounded extract requests before sending them', async () => {
+    const { runtime } = stubChrome();
+    await expect(extractDesignSystem('')).rejects.toThrow(/Invalid design-system request/);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('forwards only guarded design-system events', () => {
+    const { runtime } = stubChrome();
+    const listener = vi.fn();
+    onPanelEvent(listener);
+    const handler = runtime.onMessage.addListener.mock.calls[0]?.[0] as
+      | ((message: unknown) => void)
+      | undefined;
+    expect(handler).toBeTypeOf('function');
+
+    handler?.({ type: MessageType.DesignSystemChanged, payload: makeDesignSystemSnapshot() });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    handler?.({ type: MessageType.DesignSystemChanged, payload: {} });
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });

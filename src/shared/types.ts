@@ -297,3 +297,92 @@ export type HierarchyDirection = 'parent' | 'child' | 'previous-sibling' | 'next
 export interface SelectionClearedPayload {
   reason: string;
 }
+
+export const DESIGN_SYSTEM_LIMITS = {
+  maxElements: 600,
+  maxDepth: 12,
+  maxChildrenPerNode: 40,
+  maxPropertiesPerElement: 24,
+  maxStylesheets: 50,
+  maxCssRules: 300,
+  maxDeclarationsPerRule: 20,
+  maxDetectedValuesPerCategory: 40,
+  maxValuesPerToken: 8,
+  maxExemplarsPerToken: 3,
+  maxTokensPerCategory: 20,
+  maxTotalTokens: 60,
+  maxSelectorLength: 120,
+  maxValueLength: 240,
+  maxPropertyNameLength: 64,
+  maxRequestIdLength: 64,
+  maxTokenNameLength: 64,
+  maxTagLength: 64,
+  maxNotes: 20,
+  minTokenSupport: 2,
+  maxPayloadChars: 60000,
+} as const;
+
+export type DesignSystemCategory = 'color' | 'typography' | 'spacing' | 'effect' | 'gradient';
+
+export const DESIGN_SYSTEM_CATEGORIES: DesignSystemCategory[] = [
+  'color',
+  'typography',
+  'spacing',
+  'effect',
+  'gradient',
+];
+
+export type DesignTokenNameBasis = 'rank' | 'heuristic';
+
+export interface DesignDetectedValue {
+  value: string;
+  normalized: string;
+  count: number;
+  sourceProperties: string[];
+}
+
+export interface DesignExemplar {
+  tag: string;
+  roleHint: string | null;
+  selector: string;
+}
+
+export interface DesignTokenCandidate {
+  id: string;
+  category: DesignSystemCategory;
+  inferredName: string;
+  nameBasis: DesignTokenNameBasis;
+  detected: {
+    values: DesignDetectedValue[];
+    exemplars: DesignExemplar[];
+    support: number;
+  };
+}
+
+export interface DesignSystemSummary {
+  elementsScanned: number;
+  elementsSkipped: number;
+  textElementsInspected: number;
+  stylesheetsReadable: number;
+  stylesheetsInaccessible: number;
+  tokensByCategory: Record<DesignSystemCategory, number>;
+}
+
+export interface DesignDetectedValues {
+  palette: DesignDetectedValue[];
+  typography: DesignDetectedValue[];
+  spacing: DesignDetectedValue[];
+  effects: DesignDetectedValue[];
+  gradients: DesignDetectedValue[];
+}
+
+export interface DesignSystemSnapshot {
+  requestId: string;
+  capturedAt: string;
+  origin: string;
+  summary: DesignSystemSummary;
+  detected: DesignDetectedValues;
+  tokens: DesignTokenCandidate[];
+  unavailable: string[];
+  limitations: string[];
+}

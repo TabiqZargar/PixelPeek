@@ -1,4 +1,9 @@
-import type { ElementInfo, ElementSnapshot, MotionSnapshot } from '../src/shared/types';
+import type {
+  DesignSystemSnapshot,
+  ElementInfo,
+  ElementSnapshot,
+  MotionSnapshot,
+} from '../src/shared/types';
 
 export function makeElementInfo(overrides: Partial<ElementInfo> = {}): ElementInfo {
   return {
@@ -117,6 +122,75 @@ export function makeMotionSnapshot(overrides: Partial<MotionSnapshot> = {}): Mot
     replay: { isolatedActiveId: null, liveRestorableIds: [] },
     limitations: [],
     capturedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+export function makeDesignSystemSnapshot(overrides: Partial<DesignSystemSnapshot> = {}): DesignSystemSnapshot {
+  const colorValue = {
+    value: 'rgb(139, 109, 255)',
+    normalized: 'rgb(139 109 255)',
+    count: 2,
+    sourceProperties: ['background-color'],
+  };
+  return {
+    requestId: 'ds-1',
+    capturedAt: '2026-01-01T00:00:00.000Z',
+    origin: 'https://example.com',
+    summary: {
+      elementsScanned: 24,
+      elementsSkipped: 3,
+      textElementsInspected: 8,
+      stylesheetsReadable: 1,
+      stylesheetsInaccessible: 0,
+      tokensByCategory: { color: 1, typography: 0, spacing: 0, effect: 0, gradient: 0 },
+    },
+    detected: {
+      palette: [
+        colorValue,
+        {
+          value: 'rgb(255, 97, 97)',
+          normalized: 'rgb(255 97 97)',
+          count: 1,
+          sourceProperties: ['color'],
+        },
+      ],
+      typography: [
+        {
+          value: '14px',
+          normalized: '14px',
+          count: 8,
+          sourceProperties: ['font-size'],
+        },
+      ],
+      spacing: [
+        {
+          value: '8px',
+          normalized: '8px',
+          count: 6,
+          sourceProperties: ['padding-top'],
+        },
+      ],
+      effects: [],
+      gradients: [],
+    },
+    tokens: [
+      {
+        id: 'color-1',
+        category: 'color',
+        inferredName: '--accent-purple',
+        nameBasis: 'heuristic',
+        detected: {
+          values: [colorValue],
+          exemplars: [
+            { tag: 'button', roleHint: 'button', selector: 'button.card' },
+          ],
+          support: 2,
+        },
+      },
+    ],
+    unavailable: ['cross-origin stylesheets'],
+    limitations: ['computed values only'],
     ...overrides,
   };
 }

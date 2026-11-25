@@ -1,6 +1,7 @@
 import {
   MessageType,
   isContentEvent,
+  isDesignSystemRequest,
   isRequestResult,
   isStateResult,
   type ContentEvent,
@@ -50,6 +51,12 @@ export async function replayMotion(action: MotionReplayAction, animationId?: str
     action,
     ...(animationId ? { animationId } : {}),
   });
+}
+
+export async function extractDesignSystem(requestId: string): Promise<RequestResult> {
+  const request = { type: MessageType.ExtractDesignSystem, requestId } as const;
+  if (!isDesignSystemRequest(request)) throw new Error('Invalid design-system request.');
+  return sendToBackground(request);
 }
 
 export async function pingTab(tabId: number): Promise<boolean> {

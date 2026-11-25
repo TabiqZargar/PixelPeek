@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   MessageType,
   isContentEvent,
+  isDesignSystemRequest,
+  isDesignSystemSnapshot,
   isElementInfo,
   isElementSnapshot,
   isInspectionState,
@@ -14,7 +16,7 @@ import {
 } from '../src/shared/messages';
 import { describeMessageError, isInspectableUrl } from '../src/shared/tabs';
 import type { ElementInfo } from '../src/shared/types';
-import { makeSnapshot } from './fixtures';
+import { makeDesignSystemSnapshot, makeSnapshot } from './fixtures';
 
 const element: ElementInfo = {
   tag: 'button',
@@ -130,5 +132,60 @@ describe('Phase 3 message guards', () => {
     ).toBe(true);
     expect(isPanelRequest({ type: MessageType.ReplayMotion, action: 'unknown' })).toBe(false);
     expect(isPanelRequest({ type: MessageType.ReplayMotion, action: 'live-restart', animationId: 4 })).toBe(false);
+  });
+});
+
+describe('Phase 4 design-system contracts', () => {
+  it('accepts bounded snapshots and preserves low-frequency palette values', () => {
+    const snapshot = makeDesignSystemSnapshot();
+    expect(isDesignSystemSnapshot(snapshot)).toBe(true);
+    expect(snapshot.detected.palette[1]?.count).toBe(1);
+    expect(isDesignSystemSnapshot({
+      ...snapshot,
+      detected: { ...snapshot.detected, palette: [] },
+    })).toBe(true);
+  });
+
+  it('rejects malformed payloads, unsafe values, and unbounded selectors', () => {
+    const snapshot = makeDesignSystemSnapshot();
+    const token = snapshot.tokens[0]!;
+    expect(isDesignSystemSnapshot({ ...snapshot, origin: 'https://example.com/path' })).toBe(false);
+    expect(isDesignSystemSnapshot({ ...snapshot, requestId: 'x'.repeat(65) })).toBe(false);
+    expect(isDesignSystemSnapshot({
+      ...snapshot,
+      detected: {
+        ...snapshot.detected,
+        palette: [{ ...snapshot.detected.palette[0]!, value: 'url(secret)' }],
+      },
+    })).toBe(false);
+    expect(isDesignSystemSnapshot({
+      ...snapshot,
+      tokens: [{
+        ...token,
+        detected: {
+          ...token.detected,
+          exemplars: [{ tag: 'button', roleHint: null, selector: '#secret .a .b .c' }],
+        },
+      }],
+    })).toBe(false);
+    expect(isDesignSystemSnapshot({
+      ...snapshot,
+      tokens: [{ ...token, detected: { ...token.detected, support: 1 } }],
+    })).toBe(false);
+    expect(isDesignSystemSnapshot({
+      ...snapshot,
+      summary: { ...snapshot.summary, elementsScanned: 999 },
+    })).toBe(false);
+  });
+
+  it('validates extract requests and design-system events', () => {
+    const snapshot = makeDesignSystemSnapshot();
+    expect(isDesignSystemRequest({ type: MessageType.ExtractDesignSystem, requestId: 'ds-2' })).toBe(true);
+    expect(isPanelRequest({ type: MessageType.ExtractDesignSystem, requestId: 'ds-2' })).toBe(true);
+    expect(isDesignSystemRequest({ type: MessageType.ExtractDesignSystem, requestId: '' })).toBe(false);
+    expect(isPanelRequest({ type: MessageType.ExtractDesignSystem })).toBe(false);
+    expect(isPanelEvent({ type: MessageType.DesignSystemChanged, payload: snapshot })).toBe(true);
+    expect(isContentEvent({ type: MessageType.DesignSystemChanged, payload: snapshot })).toBe(true);
+    expect(isPanelEvent({ type: MessageType.DesignSystemChanged, payload: {} })).toBe(false);
   });
 });

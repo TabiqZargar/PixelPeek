@@ -1,3 +1,8 @@
+import {
+  DESIGN_SYSTEM_CATEGORIES,
+  DESIGN_SYSTEM_LIMITS,
+  type DesignSystemSnapshot,
+} from './types';
 import type {
   ElementInfo,
   ElementSnapshot,
@@ -22,6 +27,8 @@ export const MessageType = {
   SnapshotChanged: 'pixelpeek/snapshot-changed',
   SelectionCleared: 'pixelpeek/selection-cleared',
   ReplayMotion: 'pixelpeek/replay-motion',
+  ExtractDesignSystem: 'pixelpeek/extract-design-system',
+  DesignSystemChanged: 'pixelpeek/design-system-changed',
 } as const;
 
 export type MessageTypeValue = (typeof MessageType)[keyof typeof MessageType];
@@ -32,7 +39,8 @@ export type PanelRequest =
   | { type: typeof MessageType.GetState }
   | { type: typeof MessageType.GetSnapshot }
   | { type: typeof MessageType.NavigateHierarchy; direction: HierarchyDirection; index?: number }
-  | { type: typeof MessageType.ReplayMotion; action: MotionReplayAction; animationId?: string };
+  | { type: typeof MessageType.ReplayMotion; action: MotionReplayAction; animationId?: string }
+  | { type: typeof MessageType.ExtractDesignSystem; requestId: string };
 
 export type ContentRequest =
   | { type: typeof MessageType.Ping }
@@ -40,7 +48,8 @@ export type ContentRequest =
   | { type: typeof MessageType.StopInspection }
   | { type: typeof MessageType.GetSnapshot }
   | { type: typeof MessageType.NavigateHierarchy; direction: HierarchyDirection; index?: number }
-  | { type: typeof MessageType.ReplayMotion; action: MotionReplayAction; animationId?: string };
+  | { type: typeof MessageType.ReplayMotion; action: MotionReplayAction; animationId?: string }
+  | { type: typeof MessageType.ExtractDesignSystem; requestId: string };
 
 export type ContentEvent =
   | { type: typeof MessageType.Pong }
@@ -48,7 +57,8 @@ export type ContentEvent =
   | { type: typeof MessageType.StateChanged; payload: InspectionState }
   | { type: typeof MessageType.RuntimeError; payload: { message: string; code?: string } }
   | { type: typeof MessageType.SnapshotChanged; payload: ElementSnapshot }
-  | { type: typeof MessageType.SelectionCleared; payload: SelectionClearedPayload };
+  | { type: typeof MessageType.SelectionCleared; payload: SelectionClearedPayload }
+  | { type: typeof MessageType.DesignSystemChanged; payload: DesignSystemSnapshot };
 
 export type PanelEvent = Exclude<ContentEvent, { type: typeof MessageType.Pong }>;
 
@@ -77,6 +87,19 @@ function isNullableString(value: unknown): value is string | null {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+function isBoundedString(value: unknown, maxLength: number): value is string {
+  return isNonEmptyString(value) && value.length <= maxLength;
+}
+
+function isBoundedStringArray(value: unknown, maxLength: number, maxItems: number): boolean {
+  return Array.isArray(value) && value.length <= maxItems &&
+    value.every((entry) => isBoundedString(entry, maxLength));
+}
+
+function isIntegerInRange(value: unknown, min: number, max: number): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -233,6 +256,156 @@ export function isMotionReplayAction(value: unknown): value is MotionReplayActio
     value === 'live-restart' ||
     value === 'live-restore'
   );
+}
+
+function isDesignSystemCategory(value: unknown): boolean {
+  return DESIGN_SYSTEM_CATEGORIES.includes(value as (typeof DESIGN_SYSTEM_CATEGORIES)[number]);
+}
+
+export function isDesignSystemRequest(value: unknown): value is {
+  type: typeof MessageType.ExtractDesignSystem;
+  requestId: string;
+} {
+  return isRecord(value) &&
+    value.type === MessageType.ExtractDesignSystem &&
+    isBoundedString(value.requestId, DESIGN_SYSTEM_LIMITS.maxRequestIdLength);
+}
+
+function isOrigin(value: unknown): boolean {
+  if (!isBoundedString(value, DESIGN_SYSTEM_LIMITS.maxValueLength)) return false;
+  try {
+    return new URL(value).origin === value;
+  } catch {
+    return false;
+  }
+}
+
+function hasUnsafeCss(value: string): boolean {
+  return /[<>{};]/.test(value) ||
+    /(?:url|expression)\s*\(/i.test(value) ||
+    /(?:data:|javascript:)/i.test(value);
+}
+
+function isBoundedSelector(value: unknown): boolean {
+  if (!isBoundedString(value, DESIGN_SYSTEM_LIMITS.maxSelectorLength)) return false;
+  if (/[<>{};\[\]\\]/.test(value)) return false;
+  if (/(?:url|expression)\s*\(/i.test(value)) return false;
+  if (/(?:data:|javascript:)/i.test(value)) return false;
+  if (value.includes('#')) return false;
+  if (value.includes('\\')) return false;
+  return (value.match(/\./g) ?? []).length <= 2;
+}
+
+function isDesignDetectedValue(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBoundedString(value.value, DESIGN_SYSTEM_LIMITS.maxValueLength)) return false;
+  if (!isBoundedString(value.normalized, DESIGN_SYSTEM_LIMITS.maxValueLength)) return false;
+  if (hasUnsafeCss(value.value) || hasUnsafeCss(value.normalized)) return false;
+  if (!isIntegerInRange(value.count, 1, DESIGN_SYSTEM_LIMITS.maxElements)) return false;
+  return isBoundedStringArray(
+    value.sourceProperties,
+    DESIGN_SYSTEM_LIMITS.maxPropertyNameLength,
+    DESIGN_SYSTEM_LIMITS.maxPropertiesPerElement,
+  );
+}
+
+function isDesignDetectedValues(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const keys = ['palette', 'typography', 'spacing', 'effects', 'gradients'] as const;
+  return keys.every((key) => {
+    const entries = value[key];
+    return Array.isArray(entries) &&
+      entries.length <= DESIGN_SYSTEM_LIMITS.maxDetectedValuesPerCategory &&
+      entries.every(isDesignDetectedValue);
+  });
+}
+
+function isDesignExemplar(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBoundedString(value.tag, DESIGN_SYSTEM_LIMITS.maxTagLength)) return false;
+  if (value.roleHint !== null && !isBoundedString(value.roleHint, DESIGN_SYSTEM_LIMITS.maxTagLength)) {
+    return false;
+  }
+  return isBoundedSelector(value.selector);
+}
+
+function isDesignTokenCandidate(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBoundedString(value.id, DESIGN_SYSTEM_LIMITS.maxRequestIdLength)) return false;
+  if (!isDesignSystemCategory(value.category)) return false;
+  if (typeof value.inferredName !== 'string' ||
+    value.inferredName.length > DESIGN_SYSTEM_LIMITS.maxTokenNameLength ||
+    !/^--[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.inferredName)
+  ) {
+    return false;
+  }
+  if (value.nameBasis !== 'rank' && value.nameBasis !== 'heuristic') return false;
+  if (!isRecord(value.detected)) return false;
+  if (!isIntegerInRange(
+    value.detected.support,
+    DESIGN_SYSTEM_LIMITS.minTokenSupport,
+    DESIGN_SYSTEM_LIMITS.maxElements,
+  )) {
+    return false;
+  }
+  const values = value.detected.values;
+  const exemplars = value.detected.exemplars;
+  if (!Array.isArray(values) || values.length === 0 ||
+    values.length > DESIGN_SYSTEM_LIMITS.maxValuesPerToken || !values.every(isDesignDetectedValue)
+  ) {
+    return false;
+  }
+  return Array.isArray(exemplars) &&
+    exemplars.length <= DESIGN_SYSTEM_LIMITS.maxExemplarsPerToken &&
+    exemplars.every(isDesignExemplar);
+}
+
+function isDesignSystemSummary(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const counts: Array<[unknown, number]> = [
+    [value.elementsScanned, DESIGN_SYSTEM_LIMITS.maxElements],
+    [value.elementsSkipped, DESIGN_SYSTEM_LIMITS.maxElements],
+    [value.textElementsInspected, DESIGN_SYSTEM_LIMITS.maxElements],
+    [value.stylesheetsReadable, DESIGN_SYSTEM_LIMITS.maxStylesheets],
+    [value.stylesheetsInaccessible, DESIGN_SYSTEM_LIMITS.maxStylesheets],
+  ];
+  if (!counts.every(([count, max]) => isIntegerInRange(count, 0, max))) return false;
+  const tokensByCategory = value.tokensByCategory;
+  if (!isRecord(tokensByCategory)) return false;
+  return DESIGN_SYSTEM_CATEGORIES.every((category) =>
+    isIntegerInRange(
+      tokensByCategory[category],
+      0,
+      DESIGN_SYSTEM_LIMITS.maxTokensPerCategory,
+    ),
+  );
+}
+
+export function isDesignSystemSnapshot(value: unknown): value is DesignSystemSnapshot {
+  if (!isRecord(value)) return false;
+  if (!isBoundedString(value.requestId, DESIGN_SYSTEM_LIMITS.maxRequestIdLength)) return false;
+  if (!isBoundedString(value.capturedAt, DESIGN_SYSTEM_LIMITS.maxValueLength)) return false;
+  if (!isOrigin(value.origin)) return false;
+  if (!isDesignSystemSummary(value.summary)) return false;
+  if (!isDesignDetectedValues(value.detected)) return false;
+  if (!Array.isArray(value.tokens) || value.tokens.length > DESIGN_SYSTEM_LIMITS.maxTotalTokens ||
+    !value.tokens.every(isDesignTokenCandidate)
+  ) {
+    return false;
+  }
+  if (!isBoundedStringArray(value.unavailable, DESIGN_SYSTEM_LIMITS.maxValueLength, DESIGN_SYSTEM_LIMITS.maxNotes)) {
+    return false;
+  }
+  if (!isBoundedStringArray(value.limitations, DESIGN_SYSTEM_LIMITS.maxValueLength, DESIGN_SYSTEM_LIMITS.maxNotes)) {
+    return false;
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    return false;
+  }
+  return serialized.length <= DESIGN_SYSTEM_LIMITS.maxPayloadChars;
 }
 
 function isDimensions(value: unknown): boolean {
@@ -416,6 +589,8 @@ export function isPanelEvent(value: unknown): value is PanelEvent {
       return isElementSnapshot(value.payload);
     case MessageType.SelectionCleared:
       return isSelectionClearedPayload(value.payload);
+    case MessageType.DesignSystemChanged:
+      return isDesignSystemSnapshot(value.payload);
     default:
       return false;
   }
@@ -462,6 +637,8 @@ export function isPanelRequest(value: unknown): value is PanelRequest {
     case MessageType.ReplayMotion:
       return isMotionReplayAction(value.action) &&
         (value.animationId === undefined || isNonEmptyString(value.animationId));
+    case MessageType.ExtractDesignSystem:
+      return isDesignSystemRequest(value);
     default:
       return false;
   }
