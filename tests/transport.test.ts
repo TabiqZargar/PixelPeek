@@ -128,6 +128,20 @@ describe('Phase 4 design-system transport', () => {
     });
   });
 
+  it('rejects malformed extraction acknowledgements', async () => {
+    const { runtime } = stubChrome();
+    runtime.sendMessage.mockResolvedValueOnce(undefined);
+    await expect(extractDesignSystem('ds-malformed')).rejects.toThrow(/Invalid response/);
+
+    runtime.sendMessage.mockResolvedValueOnce({ type: MessageType.Pong });
+    await expect(extractDesignSystem('ds-pong')).rejects.toThrow(/Invalid response/);
+
+    runtime.sendMessage.mockResolvedValueOnce({ ok: true, error: 123 });
+    await expect(extractDesignSystem('ds-extra-error')).rejects.toThrow(
+      'Invalid response from the background service worker.',
+    );
+  });
+
   it('rejects unbounded extract requests before sending them', async () => {
     const { runtime } = stubChrome();
     await expect(extractDesignSystem('')).rejects.toThrow(/Invalid design-system request/);

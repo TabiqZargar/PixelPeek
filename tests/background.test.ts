@@ -254,6 +254,77 @@ describe('Phase 4 background routing', () => {
     expect(sentToTab(stub, MessageType.ExtractDesignSystem)).toBeUndefined();
   });
 
+  it('returns a typed acknowledgement when active-tab lookup fails', async () => {
+    const stub = await loadBackground(createStub());
+    stub.tabs.query.mockRejectedValue(new Error('query failed'));
+
+    expect(await dispatch(stub, {
+      type: MessageType.ExtractDesignSystem,
+      requestId: 'ds-query-failure',
+    }, {})).toEqual({
+      ok: false,
+      error: 'query failed',
+      errorCode: 'design-system-extraction-failed',
+    });
+  });
+
+  it('returns a typed acknowledgement when pending state cannot be stored', async () => {
+    const base = createStub();
+    base.storage.session.set = vi.fn().mockRejectedValue(new Error('session unavailable'));
+    const stub = await loadBackground(base);
+    useLiveContent(stub);
+    stub.tabs.query.mockResolvedValue([{ id: 42, url: 'https://example.com/page' }]);
+
+    expect(await dispatch(stub, {
+      type: MessageType.ExtractDesignSystem,
+      requestId: 'ds-storage-failure',
+    }, {})).toEqual({
+      ok: false,
+      error: 'session unavailable',
+      errorCode: 'design-system-extraction-failed',
+    });
+  });
+
+  it('acknowledges a missing active tab with a typed error', async () => {
+    const stub = await loadBackground(createStub());
+    stub.tabs.query.mockResolvedValue([]);
+
+    expect(await dispatch(stub, {
+      type: MessageType.ExtractDesignSystem,
+      requestId: 'ds-no-tab',
+    }, {})).toEqual({
+      ok: false,
+      error: 'There is no active tab to inspect.',
+      errorCode: 'no-active-tab',
+    });
+  });
+
+  it('delivers a snapshot emitted before the acknowledgement resolves', async () => {
+    const stub = await loadBackground(createStub());
+    stub.tabs.query.mockResolvedValue([{ id: 42, url: 'https://example.com/page' }]);
+    stub.tabs.sendMessage.mockImplementation(async (_tabId: number, message: { type: string; requestId?: string }) => {
+      if (message.type === MessageType.Ping) return { type: MessageType.Pong };
+      if (message.type === MessageType.ExtractDesignSystem) {
+        const requestId = message.requestId ?? '';
+        void dispatch(stub, {
+          type: MessageType.DesignSystemChanged,
+          payload: makeDesignSystemSnapshot({ requestId }),
+        }, { tab: { id: 42, url: 'https://example.com/page' } });
+        return { ok: true };
+      }
+      return { ok: true };
+    });
+
+    expect(await dispatch(stub, {
+      type: MessageType.ExtractDesignSystem,
+      requestId: 'ds-early-event',
+    }, {})).toEqual({ ok: true });
+    await flush();
+
+    expect(sentEvents(stub, MessageType.DesignSystemChanged)).toHaveLength(1);
+    expect(stub.store.has('design-system-request')).toBe(false);
+  });
+
   it('clears pending extraction on tab switch, closure, and navigation', async () => {
     const stub = await loadBackground(createStub());
     useLiveContent(stub);

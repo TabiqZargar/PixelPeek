@@ -152,28 +152,28 @@ async function extractDesignSystem(request: unknown): Promise<RequestResult> {
     };
   }
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || tab.id === undefined) {
-    return { ok: false, error: 'There is no active tab to inspect.', errorCode: 'no-active-tab' };
-  }
-  const url = tab.url;
-  if (!isDesignInspectableUrl(url)) {
-    return {
-      ok: false,
-      error: 'This page cannot be inspected. Try a regular http(s) website.',
-      errorCode: 'unsupported-url',
-    };
-  }
-
-  const tabId = tab.id;
-  const pending: DesignSystemRequestState = {
-    tabId,
-    requestId: request.requestId,
-    url: url ?? '',
-  };
-  await setDesignRequest(pending);
-
+  let tabId: number | undefined;
   try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || tab.id === undefined) {
+      return { ok: false, error: 'There is no active tab to inspect.', errorCode: 'no-active-tab' };
+    }
+    const url = tab.url;
+    if (!isDesignInspectableUrl(url)) {
+      return {
+        ok: false,
+        error: 'This page cannot be inspected. Try a regular http(s) website.',
+        errorCode: 'unsupported-url',
+      };
+    }
+
+    tabId = tab.id;
+    await setDesignRequest({
+      tabId,
+      requestId: request.requestId,
+      url: url ?? '',
+    });
+
     if (!(await pingTab(tabId))) {
       await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
       if (!(await pingTab(tabId))) {
@@ -191,9 +191,12 @@ async function extractDesignSystem(request: unknown): Promise<RequestResult> {
     });
     return { ok: true };
   } catch (error) {
-    const current = await getDesignRequest();
-    if (current?.requestId === request.requestId && current.tabId === tabId) {
-      await clearDesignRequest();
+    const current = await getDesignRequest().catch(() => null);
+    if (
+      current?.requestId === request.requestId &&
+      (tabId === undefined || current.tabId === tabId)
+    ) {
+      await clearDesignRequest().catch(() => undefined);
     }
     return {
       ok: false,
@@ -366,7 +369,11 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     return true;
   }
   if (type === MessageType.ExtractDesignSystem) {
-    void extractDesignSystem(message).then(sendResponse);
+    void extractDesignSystem(message).then(sendResponse, (error: unknown) => sendResponse({
+      ok: false,
+      error: describeMessageError(error),
+      errorCode: 'design-system-extraction-failed',
+    }));
     return true;
   }
   if (type === MessageType.GetSnapshot) {
