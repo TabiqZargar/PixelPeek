@@ -1,10 +1,26 @@
-import { MessageType, isHierarchyDirection, isMotionReplayAction, type ContentEvent } from '../shared/messages';
-import type {
-  ElementSnapshot,
-  HierarchyDirection,
-  MotionReplayAction,
-  MotionTarget,
+import {
+  MessageType,
+  isContentEvent,
+  isDesignSystemRequest,
+  isDesignSystemSnapshot,
+  isHierarchyDirection,
+  isMotionReplayAction,
+  type ContentEvent,
+} from '../shared/messages';
+import {
+  DESIGN_SYSTEM_LIMITS,
+  type ElementSnapshot,
+  type HierarchyDirection,
+  type MotionReplayAction,
+  type MotionTarget,
 } from '../shared/types';
+import {
+  extractDesignSystemSnapshot,
+  type DesignElementMeta,
+  type DesignStylesheetRecord,
+  type DesignStylesheetRule,
+  type DesignSystemDeps,
+} from './design-system';
 import {
   MOTION_LIMITS,
   type ObservedAnimationRecord,
@@ -16,6 +32,7 @@ import {
 import { createSnapshot, type SnapshotDeps } from './snapshot';
 
 const HOST_ID = 'pixelpeek-overlay-host';
+const DESIGN_STYLESHEET_DEPTH = 6;
 
 const OVERLAY_CSS = `
 :host {
@@ -98,7 +115,173 @@ function isIgnored(element: Element): boolean {
   );
 }
 
+function designSelector(element: Element): string {
+  const tag = element.tagName.toLowerCase();
+  if (tag.length > DESIGN_SYSTEM_LIMITS.maxTagLength || !/^[a-z][a-z0-9-]*$/.test(tag)) return 'div';
+  const classes = Array.from(element.classList)
+    .filter((name) => /^[a-z][a-z0-9_-]*$/.test(name) && name.length <= DESIGN_SYSTEM_LIMITS.maxTagLength)
+    .slice(0, 2);
+  return classes.length ? `${tag}.${classes.join('.')}` : tag;
+}
+
+function designMeta(node: unknown): DesignElementMeta {
+  const element = node as Element | null;
+  if (!element || typeof element.tagName !== 'string') {
+    return {
+      tag: 'div',
+      roleHint: null,
+      selector: 'div',
+      hidden: true,
+      iframe: false,
+      shadowRoot: false,
+      formControl: false,
+      textRendering: false,
+    };
+  }
+  const tag = element.tagName.toLowerCase();
+  const editable = element.getAttribute('contenteditable');
+  let textRendering = false;
+  for (const child of Array.from(element.childNodes ?? [])) {
+    if (child.nodeType === 3) {
+      textRendering = true;
+      break;
+    }
+  }
+  return {
+    tag,
+    roleHint: element.getAttribute('role'),
+    selector: designSelector(element),
+    hidden: ('hidden' in element && (element as { hidden?: unknown }).hidden === true) ||
+      element.hasAttribute('hidden') ||
+      element.getAttribute('aria-hidden') === 'true',
+    iframe: tag === 'iframe' || tag === 'frame',
+    shadowRoot: Boolean((element as Element & { shadowRoot?: unknown }).shadowRoot),
+    formControl: /^(input|textarea|select)$/.test(tag) ||
+      (editable !== null && editable !== 'false'),
+    textRendering,
+  };
+}
+
+function designGeometry(node: unknown): { width: number; height: number } {
+  try {
+    const rect = (node as Element).getBoundingClientRect?.();
+    return {
+      width: typeof rect?.width === 'number' && Number.isFinite(rect.width) ? rect.width : 0,
+      height: typeof rect?.height === 'number' && Number.isFinite(rect.height) ? rect.height : 0,
+    };
+  } catch {
+    return { width: 0, height: 0 };
+  }
+}
+
+function designComputedStyle(
+  node: unknown,
+  properties: readonly string[],
+): Readonly<Record<string, string>> {
+  const element = node as Element | null;
+  const view = element?.ownerDocument?.defaultView;
+  if (!element || !view) return {};
+  try {
+    const style = view.getComputedStyle(element);
+    const values: Record<string, string> = {};
+    for (const property of properties) {
+      try {
+        values[property] = style.getPropertyValue(property) ?? '';
+      } catch {
+        values[property] = '';
+      }
+    }
+    return values;
+  } catch {
+    return {};
+  }
+}
+
+function readDesignStylesheets(): DesignStylesheetRecord[] {
+  const records: DesignStylesheetRecord[] = [];
+  const styleRuleType = typeof CSSRule === 'undefined' ? 1 : CSSRule.STYLE_RULE;
+  const keyframesRuleType = typeof CSSRule === 'undefined' ? 7 : CSSRule.KEYFRAMES_RULE;
+  const webkitKeyframesRuleType =
+    typeof CSSRule === 'undefined'
+      ? 12
+      : ((CSSRule as unknown as Record<string, number>).WEBKIT_KEYFRAMES_RULE ?? 12);
+
+  const walk = (rules: CSSRuleList, depth: number, output: DesignStylesheetRule[]): void => {
+    if (depth > DESIGN_STYLESHEET_DEPTH) return;
+    for (const rule of Array.from(rules)) {
+      if (output.length >= DESIGN_SYSTEM_LIMITS.maxCssRules) return;
+      if (rule.type === keyframesRuleType || rule.type === webkitKeyframesRuleType) continue;
+      const declarations: Array<[string, string]> = [];
+      const style = (rule as CSSStyleRule).style;
+      if (style && rule.type === styleRuleType) {
+        const count = Math.min(style.length, DESIGN_SYSTEM_LIMITS.maxDeclarationsPerRule);
+        for (let index = 0; index < count; index += 1) {
+          const name = style.item(index);
+          if (!name) continue;
+          declarations.push([name, style.getPropertyValue(name)]);
+        }
+      }
+      output.push({
+        selector: (rule as CSSStyleRule).selectorText?.trim() || null,
+        declarations,
+      });
+      const nested = (rule as CSSRule & { cssRules?: CSSRuleList }).cssRules;
+      if (nested) walk(nested, depth + 1, output);
+    }
+  };
+
+  for (const sheet of Array.from(document.styleSheets).slice(0, DESIGN_SYSTEM_LIMITS.maxStylesheets)) {
+    let rules: CSSRuleList;
+    try {
+      if (sheet.disabled) {
+        records.push({ accessible: false, rules: [] });
+        continue;
+      }
+      rules = sheet.cssRules;
+    } catch {
+      records.push({ accessible: false, rules: [] });
+      continue;
+    }
+    const output: DesignStylesheetRule[] = [];
+    try {
+      walk(rules, 0, output);
+    } catch {
+      records.push({ accessible: false, rules: [] });
+      continue;
+    }
+    records.push({ accessible: true, rules: output });
+  }
+  return records;
+}
+
+const designSystemDeps: DesignSystemDeps = {
+  sample: {
+    children: (node) => {
+      const element = node as Element | null;
+      return element && typeof element.children !== 'undefined' ? Array.from(element.children) : [];
+    },
+    meta: designMeta,
+    geometry: designGeometry,
+    computedStyle: designComputedStyle,
+  },
+  readStylesheets: readDesignStylesheets,
+  now: () => new Date().toISOString(),
+  origin: () => {
+    try {
+      return window.location.origin;
+    } catch {
+      return '';
+    }
+  },
+};
+
+function extractPageDesignSystem(requestId: string) {
+  const root = document.body && document.body.isConnected ? document.body : null;
+  return extractDesignSystemSnapshot(requestId, root, designSystemDeps);
+}
+
 function emit(event: ContentEvent): void {
+  if (!isContentEvent(event)) return;
   void chrome.runtime.sendMessage(event).catch(() => {
     /* the panel or background may be gone; the page is unaffected */
   });
@@ -718,6 +901,36 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     case MessageType.Ping:
       sendResponse({ type: MessageType.Pong });
       return false;
+    case MessageType.ExtractDesignSystem: {
+      if (!isDesignSystemRequest(message)) {
+        sendResponse({
+          ok: false,
+          error: 'Invalid design-system request.',
+          errorCode: 'invalid-request',
+        });
+        return false;
+      }
+      try {
+        const snapshot = extractPageDesignSystem(message.requestId);
+        if (!isDesignSystemSnapshot(snapshot)) {
+          throw new Error('The design system snapshot failed validation.');
+        }
+        emit({ type: MessageType.DesignSystemChanged, payload: snapshot });
+        sendResponse({ ok: true });
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        emit({
+          type: MessageType.RuntimeError,
+          payload: { message: messageText, code: 'design-system-extraction-failed' },
+        });
+        sendResponse({
+          ok: false,
+          error: messageText,
+          errorCode: 'design-system-extraction-failed',
+        });
+      }
+      return false;
+    }
     case MessageType.StartInspection:
       start();
       sendResponse({ ok: true });
