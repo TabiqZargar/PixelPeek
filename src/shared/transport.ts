@@ -19,11 +19,26 @@ export function runtimeUnavailableError(): Error {
   return new Error('Extension runtime is unavailable. Load PixelPeek as an unpacked extension.');
 }
 
+export class ExtensionRequestError extends Error {
+  readonly code: string | null;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = 'ExtensionRequestError';
+    this.code = code ?? null;
+  }
+}
+
 export async function sendToBackground(message: PanelRequest): Promise<RequestResult> {
   if (!hasRuntime()) throw runtimeUnavailableError();
   const response: unknown = await chrome.runtime.sendMessage(message);
   if (!isRequestResult(response)) throw new Error('Invalid response from the background service worker.');
-  if (!response.ok) throw new Error(response.error ?? 'The request could not be completed.');
+  if (!response.ok) {
+    throw new ExtensionRequestError(
+      response.error ?? 'The request could not be completed.',
+      response.errorCode,
+    );
+  }
   return response;
 }
 

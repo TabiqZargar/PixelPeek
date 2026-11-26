@@ -49,6 +49,17 @@ describe('transport', () => {
     await expect(sendToBackground({ type: MessageType.StartInspection })).rejects.toThrow(
       'No active tab',
     );
+
+    runtime.sendMessage.mockResolvedValueOnce({
+      ok: false,
+      error: 'This page cannot be inspected.',
+      errorCode: 'unsupported-url',
+    });
+    await expect(sendToBackground({ type: MessageType.StartInspection })).rejects.toMatchObject({
+      name: 'ExtensionRequestError',
+      message: 'This page cannot be inspected.',
+      code: 'unsupported-url',
+    });
   });
 
   it('returns the state from a valid response', async () => {

@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { usePanelMetrics } from './hooks/usePanelMetrics';
 import { useInspector } from './hooks/useInspector';
 import { AgentPromptsView } from './components/AgentPromptsView';
+import { DesignSystemWorkspace } from './components/DesignSystemWorkspace';
 import { Inspector } from './components/Inspector';
 import { MotionWorkspace } from './components/MotionWorkspace';
 import { SettingsView } from './components/SettingsView';
 import { Sidebar, type View } from './components/Sidebar';
+import { useDesignSystem } from './hooks/useDesignSystem';
 
 export function App() {
   const [view, setView] = useState<View>('inspector');
@@ -24,6 +26,7 @@ export function App() {
     copyText,
     copyCss,
   } = useInspector();
+  const design = useDesignSystem();
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-ink-950">
@@ -47,6 +50,18 @@ export function App() {
           onNavigate={(direction, index) => void navigate(direction, index)}
           onCopyText={(text, key) => void copyText(text, key)}
           onCopyCss={() => void copyCss()}
+        />
+      )}
+      {view === 'design-system' && (
+        <DesignSystemWorkspace
+          snapshot={design.snapshot}
+          status={design.status}
+          error={design.error}
+          errorCode={design.errorCode}
+          copiedKey={design.copiedKey}
+          metrics={metrics}
+          onExtract={() => void design.extract()}
+          onCopyText={(text, key) => void design.copyText(text, key)}
         />
       )}
       {view === 'motion' && (
