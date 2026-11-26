@@ -3,7 +3,9 @@ import {
   isDesignSystemRequest,
   isDesignSystemSnapshot,
   isHierarchyDirection,
+  isInspectionState,
   isMotionReplayAction,
+  isPanelEvent,
   type ContentEvent,
   type ContentRequest,
   type PanelEvent,
@@ -44,11 +46,20 @@ function isDesignInspectableUrl(url: string | undefined): boolean {
 
 async function getDesignRequest(): Promise<DesignSystemRequestState | null> {
   const stored = await chrome.storage.session.get(DESIGN_REQUEST_KEY);
-  const value = stored[DESIGN_REQUEST_KEY] as DesignSystemRequestState | undefined;
-  if (!value || typeof value !== 'object') return null;
-  if (typeof value.tabId !== 'number' || !Number.isInteger(value.tabId)) return null;
-  if (typeof value.requestId !== 'string' || typeof value.url !== 'string') return null;
-  return value;
+  const value: unknown = stored[DESIGN_REQUEST_KEY];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const request = value as Record<string, unknown>;
+  if (typeof request.tabId !== 'number' || !Number.isInteger(request.tabId)) return null;
+  if (!isDesignSystemRequest({
+    type: MessageType.ExtractDesignSystem,
+    requestId: request.requestId,
+  })) return null;
+  if (typeof request.url !== 'string' || !isDesignInspectableUrl(request.url)) return null;
+  return {
+    tabId: request.tabId,
+    requestId: request.requestId as string,
+    url: request.url,
+  };
 }
 
 async function setDesignRequest(request: DesignSystemRequestState): Promise<void> {
@@ -71,8 +82,8 @@ async function clearDesignRequestOnActivation(tabId: number): Promise<void> {
 
 async function getState(): Promise<InspectionState> {
   const stored = await chrome.storage.session.get(STATE_KEY);
-  const value = stored[STATE_KEY] as InspectionState | undefined;
-  return value ?? IDLE_STATE;
+  const value: unknown = stored[STATE_KEY];
+  return isInspectionState(value) ? value : IDLE_STATE;
 }
 
 async function setState(state: InspectionState): Promise<void> {
@@ -106,6 +117,7 @@ async function endInspection(state: InspectionState): Promise<void> {
 async function clearInspection(state: InspectionState): Promise<void> {
   if (state.tabId !== null) await stopTab(state.tabId);
   await setState(IDLE_STATE);
+  broadcast({ type: MessageType.SelectionCleared, payload: { reason: 'inspection was cleared' } });
   broadcast({ type: MessageType.StateChanged, payload: IDLE_STATE });
 }
 
@@ -213,10 +225,18 @@ async function onDesignSystemEvent(
 async function startInspection(): Promise<RequestResult> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || tab.id === undefined) {
-    return { ok: false, error: 'There is no active tab to inspect.' };
+    return {
+      ok: false,
+      error: 'There is no active tab to inspect.',
+      errorCode: 'no-active-tab',
+    };
   }
   if (!isInspectableUrl(tab.url)) {
-    return { ok: false, error: 'This page cannot be inspected. Try a regular http(s) website.' };
+    return {
+      ok: false,
+      error: 'This page cannot be inspected. Try a regular http(s) website.',
+      errorCode: 'unsupported-url',
+    };
   }
 
   const tabId = tab.id;
@@ -227,12 +247,20 @@ async function startInspection(): Promise<RequestResult> {
     if (!(await pingTab(tabId))) {
       await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
       if (!(await pingTab(tabId))) {
-        return { ok: false, error: 'The inspector could not start on this page.' };
+        return {
+          ok: false,
+          error: 'The inspector could not start on this page.',
+          errorCode: 'injection-failed',
+        };
       }
     }
     await sendToTab(tabId, { type: MessageType.StartInspection });
   } catch (error) {
-    return { ok: false, error: describeMessageError(error) };
+    return {
+      ok: false,
+      error: describeMessageError(error),
+      errorCode: 'inspection-start-failed',
+    };
   }
 
   const state: InspectionState = { tabId, active: true, lastTabId: tabId };
@@ -252,15 +280,44 @@ async function stopInspection(): Promise<RequestResult> {
 
 type PanelBoundEvent = Exclude<ContentEvent, { type: typeof MessageType.Pong }>;
 
+function matchesDesignSender(
+  sender: chrome.runtime.MessageSender,
+  pending: DesignSystemRequestState,
+): boolean {
+  const senderTabId = sender.tab?.id;
+  if (senderTabId === undefined || senderTabId !== pending.tabId) return false;
+  const senderUrl = sender.tab?.url;
+  return isDesignInspectableUrl(senderUrl) && senderUrl === pending.url;
+}
+
+function matchesContentSender(
+  sender: chrome.runtime.MessageSender | undefined,
+  state: InspectionState,
+): boolean {
+  const senderTabId = sender?.tab?.id;
+  const expectedTabId = state.tabId ?? state.lastTabId;
+  return senderTabId !== undefined && expectedTabId !== null && senderTabId === expectedTabId;
+}
+
 async function onContentEvent(
   message: PanelBoundEvent,
   sender?: chrome.runtime.MessageSender,
 ): Promise<void> {
+  if (!isPanelEvent(message)) return;
   if (message.type === MessageType.DesignSystemChanged) {
     if (sender) await onDesignSystemEvent(message, sender);
     return;
   }
+  if (message.type === MessageType.RuntimeError && message.payload.source === 'design-system') {
+    if (!sender) return;
+    const pending = await getDesignRequest();
+    if (!pending || pending.requestId !== message.payload.requestId) return;
+    if (!matchesDesignSender(sender, pending)) return;
+    broadcast(message);
+    return;
+  }
   const state = await getState();
+  if (!matchesContentSender(sender, state)) return;
   if (message.type === MessageType.StateChanged) {
     if (!message.payload.active) {
       if (!state.active) return;
@@ -353,14 +410,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     }).then(sendResponse);
     return true;
   }
-  if (
-    type === MessageType.ElementSelected ||
-    type === MessageType.StateChanged ||
-    type === MessageType.RuntimeError ||
-    type === MessageType.SnapshotChanged ||
-    type === MessageType.SelectionCleared ||
-    type === MessageType.DesignSystemChanged
-  ) {
+  if (isPanelEvent(message)) {
     void onContentEvent(message as PanelBoundEvent, sender).then(() => sendResponse({ ok: true }));
     return true;
   }
@@ -369,9 +419,8 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   void getState().then((state) => {
-    if (state.active && state.tabId !== null && state.tabId !== tabId) {
-      void clearInspection(state);
-    }
+    const selectedTabId = state.tabId ?? state.lastTabId;
+    if (selectedTabId !== null && selectedTabId !== tabId) void clearInspection(state);
   });
   void clearDesignRequestOnActivation(tabId);
 });

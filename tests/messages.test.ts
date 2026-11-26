@@ -12,6 +12,7 @@ import {
   isPanelEvent,
   isPanelRequest,
   isRequestResult,
+  isRuntimeErrorPayload,
   isStateResult,
 } from '../src/shared/messages';
 import { describeMessageError, isInspectableUrl } from '../src/shared/tabs';
@@ -101,6 +102,30 @@ describe('Phase 2 message guards', () => {
     expect(isElementSnapshot({ ...makeSnapshot(), hierarchy: { children: 'none' } })).toBe(false);
     expect(isPanelEvent({ type: MessageType.SnapshotChanged, payload: makeSnapshot() })).toBe(true);
     expect(isPanelEvent({ type: MessageType.SelectionCleared, payload: { reason: 'stopped' } })).toBe(true);
+    expect(isPanelEvent({ type: MessageType.ReplayInvalidated, payload: { reason: 'stopped' } })).toBe(true);
+    expect(isPanelEvent({ type: MessageType.ReplayInvalidated, payload: {} })).toBe(false);
+  });
+
+  it('routes attributed runtime errors and rejects unattributed ones', () => {
+    expect(isRuntimeErrorPayload({
+      source: 'inspector',
+      message: 'capture failed',
+      code: 'capture-failed',
+    })).toBe(true);
+    expect(isRuntimeErrorPayload({
+      source: 'design-system',
+      requestId: 'ds-1',
+      message: 'extraction failed',
+      code: 'design-system-extraction-failed',
+    })).toBe(true);
+    expect(isPanelEvent({
+      type: MessageType.RuntimeError,
+      payload: { source: 'design-system', message: 'extraction failed' },
+    })).toBe(false);
+    expect(isPanelEvent({
+      type: MessageType.RuntimeError,
+      payload: { message: 'unattributed failure' },
+    })).toBe(false);
   });
 
   it('validates snapshot and hierarchy requests', () => {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { usePanelMetrics } from './hooks/usePanelMetrics';
 import { useInspector } from './hooks/useInspector';
 import { AgentPromptsView } from './components/AgentPromptsView';
@@ -19,6 +19,7 @@ export function App() {
     error,
     copied,
     copiedKey,
+    replayValid,
     start,
     stop,
     navigate,
@@ -28,11 +29,16 @@ export function App() {
   } = useInspector();
   const design = useDesignSystem();
 
+  const changeView = useCallback((next: View) => {
+    if (view === 'inspector' && next !== 'inspector' && status === 'active') void stop();
+    setView(next);
+  }, [status, stop, view]);
+
   return (
     <div className="flex h-full w-full overflow-hidden bg-ink-950">
       <Sidebar
         view={view}
-        onViewChange={setView}
+        onViewChange={changeView}
         inspecting={status === 'active'}
         metrics={metrics}
       />
@@ -70,6 +76,7 @@ export function App() {
           metrics={metrics}
           copiedKey={copiedKey}
           error={error}
+          replayValid={replayValid}
           onCopyText={(text, key) => void copyText(text, key)}
           onReplay={(action, animationId) => void replay(action, animationId)}
         />

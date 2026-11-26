@@ -111,16 +111,78 @@ describe('useDesignSystem', () => {
     expect(current().errorCode).toBe('unsupported-url');
   });
 
-  it('accepts runtime extraction failures while a request is pending', () => {
+  it('accepts only the matching design-system runtime failure while pending', () => {
     mockState.extract.mockResolvedValue({ ok: true });
     clickExtract();
+    const requestId = mockState.extract.mock.calls[0]?.[0] as string;
+
     act(() =>
       mockState.listener.current?.({
         type: MessageType.RuntimeError,
-        payload: { message: 'The snapshot failed validation.', code: 'design-system-extraction-failed' },
+        payload: {
+          source: 'inspector',
+          message: 'capture failed',
+          code: 'capture-failed',
+        },
+      }),
+    );
+    expect(current().status).toBe('loading');
+
+    act(() =>
+      mockState.listener.current?.({
+        type: MessageType.RuntimeError,
+        payload: {
+          source: 'design-system',
+          requestId: 'stale-request',
+          message: 'stale failure',
+          code: 'design-system-extraction-failed',
+        },
+      }),
+    );
+    expect(current().status).toBe('loading');
+
+    act(() =>
+      mockState.listener.current?.({
+        type: MessageType.RuntimeError,
+        payload: {
+          source: 'design-system',
+          requestId,
+          message: 'The snapshot failed validation.',
+          code: 'design-system-extraction-failed',
+        },
       }),
     );
     expect(current().status).toBe('error');
     expect(current().errorCode).toBe('design-system-extraction-failed');
+  });
+
+  it('clears its own previous error on a successful retry', () => {
+    mockState.extract.mockResolvedValue({ ok: true });
+    clickExtract();
+    const requestId = mockState.extract.mock.calls[0]?.[0] as string;
+    act(() =>
+      mockState.listener.current?.({
+        type: MessageType.RuntimeError,
+        payload: {
+          source: 'design-system',
+          requestId,
+          message: 'failed',
+          code: 'design-system-extraction-failed',
+        },
+      }),
+    );
+    expect(current().status).toBe('error');
+
+    clickExtract();
+    const retryId = mockState.extract.mock.calls[1]?.[0] as string;
+    act(() =>
+      mockState.listener.current?.({
+        type: MessageType.DesignSystemChanged,
+        payload: makeDesignSystemSnapshot({ requestId: retryId }),
+      }),
+    );
+    expect(current().status).toBe('ready');
+    expect(current().error).toBeNull();
+    expect(current().errorCode).toBeNull();
   });
 });

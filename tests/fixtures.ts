@@ -189,8 +189,8 @@ export function makeDesignSystemSnapshot(overrides: Partial<DesignSystemSnapshot
         },
       },
     ],
-    unavailable: ['cross-origin stylesheets'],
-    limitations: ['computed values only'],
+    unavailable: ['1 inaccessible stylesheet(s) were skipped.'],
+    limitations: ['Computed values may not preserve authored custom-property aliases.'],
     ...overrides,
   };
 }

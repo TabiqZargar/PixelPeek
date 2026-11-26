@@ -298,6 +298,17 @@ export interface SelectionClearedPayload {
   reason: string;
 }
 
+export interface ReplayInvalidatedPayload {
+  reason: string;
+}
+
+export interface RuntimeErrorPayload {
+  source: 'inspector' | 'design-system';
+  message: string;
+  code?: string;
+  requestId?: string;
+}
+
 export const DESIGN_SYSTEM_LIMITS = {
   maxElements: 600,
   maxDepth: 12,

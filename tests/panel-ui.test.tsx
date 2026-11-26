@@ -199,6 +199,7 @@ describe('panel UI at narrow widths', () => {
         metrics={getPanelMetrics(320)}
         copiedKey={null}
         error={null}
+        replayValid
         onCopyText={() => {}}
         onReplay={() => {}}
       />,
@@ -215,6 +216,35 @@ describe('panel UI at narrow widths', () => {
     expect(container.textContent).toContain('Isolated replay');
     expect(container.textContent).toContain('Restart original');
     expect(container.textContent).toContain('Restore original');
+    const enabledReplay = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Isolated replay',
+    );
+    expect(enabledReplay?.disabled).toBe(false);
+  });
+
+  it('disables replay controls after replay handles are invalidated', () => {
+    render(
+      <MotionWorkspace
+        snapshot={snapshot}
+        metrics={getPanelMetrics(320)}
+        copiedKey={null}
+        error={null}
+        replayValid={false}
+        onCopyText={() => {}}
+        onReplay={() => {}}
+      />,
+    );
+    const replayTab = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Play' && button.getAttribute('role') === 'tab',
+    )!;
+    act(() => replayTab.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    for (const label of ['Isolated replay', 'Restart original', 'Restore original']) {
+      const button = Array.from(container.querySelectorAll('button')).find(
+        (candidate) => candidate.textContent === label,
+      );
+      expect(button?.disabled).toBe(true);
+    }
+    expect(container.textContent).toContain('Replay is no longer available for this selection.');
   });
 
   it('renders the design system workspace sections and deterministic exports', () => {

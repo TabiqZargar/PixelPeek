@@ -86,6 +86,10 @@ describe('design-system prompt export', () => {
     expect(prompt).toContain('not authored names');
     expect(prompt).toContain('Detected values:');
     expect(prompt).toContain('--accent-purple: rgb(139, 109, 255) (2 uses, heuristic)');
+    expect(prompt).toContain('Unavailable data:');
+    expect(prompt).toContain('1 inaccessible stylesheet(s) were skipped.');
+    expect(prompt).toContain('Extraction limitations:');
+    expect(prompt).toContain('Computed values may not preserve authored custom-property aliases.');
   });
 
   it('does not include page text, full URLs, titles or arbitrary notes', () => {

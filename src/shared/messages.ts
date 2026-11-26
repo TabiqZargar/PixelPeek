@@ -10,6 +10,8 @@ import type {
   InspectionState,
   MotionReplayAction,
   MotionSnapshot,
+  ReplayInvalidatedPayload,
+  RuntimeErrorPayload,
   SelectionClearedPayload,
 } from './types';
 
@@ -26,6 +28,7 @@ export const MessageType = {
   NavigateHierarchy: 'pixelpeek/navigate-hierarchy',
   SnapshotChanged: 'pixelpeek/snapshot-changed',
   SelectionCleared: 'pixelpeek/selection-cleared',
+  ReplayInvalidated: 'pixelpeek/replay-invalidated',
   ReplayMotion: 'pixelpeek/replay-motion',
   ExtractDesignSystem: 'pixelpeek/extract-design-system',
   DesignSystemChanged: 'pixelpeek/design-system-changed',
@@ -55,9 +58,10 @@ export type ContentEvent =
   | { type: typeof MessageType.Pong }
   | { type: typeof MessageType.ElementSelected; payload: ElementInfo }
   | { type: typeof MessageType.StateChanged; payload: InspectionState }
-  | { type: typeof MessageType.RuntimeError; payload: { message: string; code?: string } }
+  | { type: typeof MessageType.RuntimeError; payload: RuntimeErrorPayload }
   | { type: typeof MessageType.SnapshotChanged; payload: ElementSnapshot }
   | { type: typeof MessageType.SelectionCleared; payload: SelectionClearedPayload }
+  | { type: typeof MessageType.ReplayInvalidated; payload: ReplayInvalidatedPayload }
   | { type: typeof MessageType.DesignSystemChanged; payload: DesignSystemSnapshot };
 
 export type PanelEvent = Exclude<ContentEvent, { type: typeof MessageType.Pong }>;
@@ -565,6 +569,22 @@ export function isSelectionClearedPayload(value: unknown): value is SelectionCle
   return isRecord(value) && isNonEmptyString(value.reason);
 }
 
+export function isReplayInvalidatedPayload(value: unknown): value is ReplayInvalidatedPayload {
+  return isRecord(value) && isNonEmptyString(value.reason);
+}
+
+export function isRuntimeErrorPayload(value: unknown): value is RuntimeErrorPayload {
+  if (!isRecord(value)) return false;
+  if (value.source !== 'inspector' && value.source !== 'design-system') return false;
+  if (!isNonEmptyString(value.message)) return false;
+  if (value.code !== undefined && typeof value.code !== 'string') return false;
+  if (value.source === 'design-system') {
+    return isBoundedString(value.requestId, DESIGN_SYSTEM_LIMITS.maxRequestIdLength);
+  }
+  return value.requestId === undefined ||
+    isBoundedString(value.requestId, DESIGN_SYSTEM_LIMITS.maxRequestIdLength);
+}
+
 export function isInspectionState(value: unknown): value is InspectionState {
   if (!isRecord(value)) return false;
   if (typeof value.active !== 'boolean') return false;
@@ -583,12 +603,13 @@ export function isPanelEvent(value: unknown): value is PanelEvent {
     case MessageType.StateChanged:
       return isInspectionState(value.payload);
     case MessageType.RuntimeError:
-      return isRecord(value.payload) && isNonEmptyString(value.payload.message) &&
-        (value.payload.code === undefined || typeof value.payload.code === 'string');
+      return isRuntimeErrorPayload(value.payload);
     case MessageType.SnapshotChanged:
       return isElementSnapshot(value.payload);
     case MessageType.SelectionCleared:
       return isSelectionClearedPayload(value.payload);
+    case MessageType.ReplayInvalidated:
+      return isReplayInvalidatedPayload(value.payload);
     case MessageType.DesignSystemChanged:
       return isDesignSystemSnapshot(value.payload);
     default:

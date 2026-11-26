@@ -662,10 +662,11 @@ function restoreLiveState(id?: string): void {
   }
 }
 
-function cleanupReplay(): void {
+function cleanupReplay(reason = 'replay handles were cleared'): void {
   stopIsolated();
   restoreLiveState();
   replayables = new Map();
+  emit({ type: MessageType.ReplayInvalidated, payload: { reason } });
 }
 
 function replayMotion(action: MotionReplayAction, animationId?: string): void {
@@ -824,6 +825,7 @@ function onClick(event: MouseEvent): void {
     emit({
       type: MessageType.RuntimeError,
       payload: {
+        source: 'inspector',
         message: error instanceof Error ? error.message : String(error),
         code: 'capture-failed',
       },
@@ -921,7 +923,12 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
         const messageText = error instanceof Error ? error.message : String(error);
         emit({
           type: MessageType.RuntimeError,
-          payload: { message: messageText, code: 'design-system-extraction-failed' },
+          payload: {
+            source: 'design-system',
+            requestId: message.requestId,
+            message: messageText,
+            code: 'design-system-extraction-failed',
+          },
         });
         sendResponse({
           ok: false,

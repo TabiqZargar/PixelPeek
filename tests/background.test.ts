@@ -349,6 +349,88 @@ describe('Phase 4 background routing', () => {
     expect(events[0]).toEqual({ type: MessageType.DesignSystemChanged, payload: snapshot });
   });
 
+  it('clears stale captured state on tab activation and rejects cleanup from unrelated tabs', async () => {
+    const base = createStub();
+    base.store.set('inspection', { tabId: null, active: false, lastTabId: 7 });
+    const stub = await loadBackground(base);
+    const onActivated = stub.tabs.onActivated.addListener.mock.calls[0]?.[0] as
+      | ((details: { tabId: number }) => void)
+      | undefined;
+
+    onActivated?.({ tabId: 7 });
+    await flush();
+    expect(stub.store.get('inspection')).toEqual({ tabId: null, active: false, lastTabId: 7 });
+    expect(sentEvents(stub, MessageType.SelectionCleared)).toHaveLength(0);
+
+    onActivated?.({ tabId: 99 });
+    await flush();
+    expect(stub.store.get('inspection')).toEqual({ tabId: null, active: false });
+    expect(sentEvents(stub, MessageType.SelectionCleared)).toEqual([
+      { type: MessageType.SelectionCleared, payload: { reason: 'inspection was cleared' } },
+    ]);
+
+    base.store.set('inspection', { tabId: 7, active: true, lastTabId: 7 });
+    stub.runtime.sendMessage.mockClear();
+    const onUpdated = stub.tabs.onUpdated.addListener.mock.calls[0]?.[0] as
+      | ((tabId: number, changeInfo: { url?: string }) => void)
+      | undefined;
+    onUpdated?.(99, { url: 'https://other.example/' });
+    await flush();
+    expect(stub.store.get('inspection')).toEqual({ tabId: 7, active: true, lastTabId: 7 });
+    expect(stub.runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('broadcasts only attributed, sender-bound inspector events', async () => {
+    const stub = await loadBackground(createStub());
+    stub.store.set('inspection', { tabId: 7, active: true, lastTabId: 7 });
+    const error = {
+      type: MessageType.RuntimeError,
+      payload: { source: 'inspector', message: 'capture failed', code: 'capture-failed' },
+    };
+
+    expect(await dispatch(stub, error, { tab: { id: 7, url: 'https://example.com/' } })).toEqual({ ok: true });
+    expect(await dispatch(stub, error, { tab: { id: 99, url: 'https://example.com/' } })).toEqual({ ok: true });
+    expect(await dispatch(stub, error, {})).toEqual({ ok: true });
+    expect(await dispatch(stub, {
+      type: MessageType.RuntimeError,
+      payload: { message: 'unattributed' },
+    }, { tab: { id: 7 } })).toBe(false);
+    expect(await dispatch(stub, {
+      type: MessageType.RuntimeError,
+      payload: { source: 'design-system', requestId: 'ds-1', message: 'failed' },
+    }, { tab: { id: 7 } })).toEqual({ ok: true });
+
+    expect(sentEvents(stub, MessageType.RuntimeError)).toEqual([error]);
+  });
+
+  it('reports start failures through typed error codes and ignores malformed stored state', async () => {
+    const stub = await loadBackground(createStub());
+    stub.tabs.query.mockResolvedValue([]);
+    expect(await dispatch(stub, { type: MessageType.StartInspection }, {})).toMatchObject({
+      ok: false,
+      errorCode: 'no-active-tab',
+    });
+
+    stub.tabs.query.mockResolvedValue([{ id: 7, url: 'chrome://extensions' }]);
+    expect(await dispatch(stub, { type: MessageType.StartInspection }, {})).toMatchObject({
+      ok: false,
+      errorCode: 'unsupported-url',
+    });
+
+    stub.tabs.query.mockResolvedValue([{ id: 7, url: 'https://example.com/' }]);
+    useLiveContent(stub, 0);
+    expect(await dispatch(stub, { type: MessageType.StartInspection }, {})).toMatchObject({
+      ok: false,
+      errorCode: 'injection-failed',
+    });
+
+    stub.store.set('inspection', { tabId: '7', active: 'yes' });
+    expect(await dispatch(stub, { type: MessageType.GetState }, {})).toMatchObject({
+      ok: true,
+      state: { tabId: null, active: false },
+    });
+  });
+
   it('keeps inspector and motion routing unchanged', async () => {
     const stub = await loadBackground(createStub());
     stub.store.set('inspection', { tabId: 7, active: true, lastTabId: 7 });

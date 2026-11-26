@@ -18,10 +18,14 @@ interface ContentStub {
 }
 
 function eventOfType(stub: ContentStub, type: string) {
+  return eventsOfType(stub, type)[0];
+}
+
+function eventsOfType(stub: ContentStub, type: string) {
   const calls = stub.runtime.sendMessage.mock.calls as unknown[][];
   return calls
     .map(([message]) => message as { type?: unknown; payload?: unknown })
-    .find((message) => message?.type === type);
+    .filter((message) => message?.type === type);
 }
 
 function dispatch(stub: ContentStub, message: unknown): unknown {
@@ -133,7 +137,12 @@ describe('Phase 4 content integration', () => {
     });
     expect(eventOfType(stub, MessageType.RuntimeError)).toEqual({
       type: MessageType.RuntimeError,
-      payload: { message: 'clock failed', code: 'design-system-extraction-failed' },
+      payload: {
+        source: 'design-system',
+        requestId: 'ds-error',
+        message: 'clock failed',
+        code: 'design-system-extraction-failed',
+      },
     });
     expect(eventOfType(stub, MessageType.DesignSystemChanged)).toBeUndefined();
     clock.mockRestore();
@@ -176,5 +185,26 @@ describe('Phase 4 content integration', () => {
       errorCode: 'no-selection',
     });
     expect(dispatch(stub, { type: MessageType.StopInspection })).toEqual({ ok: true });
+  });
+
+  it('invalidates stale replay handles when inspection or selection ends', async () => {
+    const stub = await loadContent();
+    document.body.innerHTML = '<div id="target">inspect me</div>';
+    dispatch(stub, { type: MessageType.StartInspection });
+    const target = document.getElementById('target');
+    if (!target) throw new Error('Missing target fixture.');
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(eventsOfType(stub, MessageType.SnapshotChanged)).toHaveLength(1);
+    expect(eventsOfType(stub, MessageType.ReplayInvalidated).length).toBeGreaterThan(0);
+
+    dispatch(stub, { type: MessageType.StopInspection });
+    expect(eventsOfType(stub, MessageType.ReplayInvalidated).length).toBeGreaterThan(1);
+    expect(eventOfType(stub, MessageType.ReplayInvalidated)?.payload).toEqual({
+      reason: 'replay handles were cleared',
+    });
+
+    target.remove();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   });
 });

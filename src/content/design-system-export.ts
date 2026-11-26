@@ -38,6 +38,36 @@ function safeNote(value: string): string | null {
   return trimmed;
 }
 
+const PROMPT_LIMITATION_PREFIXES = [
+  'Inferred token names',
+  'Only visible same-document',
+  'Computed values',
+  'Element limit reached',
+  'Iframes are excluded',
+  'Shadow roots are excluded',
+  'Form controls are excluded',
+  'Depth limit reached',
+  'Child limit reached',
+  'Detected ',
+  'Stylesheet limit reached',
+  'CSS rule limit reached',
+  'Declaration limit reached',
+  'Token limit reached',
+  'Payload limit reached',
+];
+
+function safePromptLimitation(value: string): string | null {
+  const safe = safeNote(value);
+  if (!safe) return null;
+  return PROMPT_LIMITATION_PREFIXES.some((prefix) => safe.startsWith(prefix)) ? safe : null;
+}
+
+function safePromptUnavailable(value: string): string | null {
+  const safe = safeNote(value);
+  if (!safe) return null;
+  return /^\d+ inaccessible stylesheet\(s\) were skipped\.$/.test(safe) ? safe : null;
+}
+
 function exportOrigin(value: string): string {
   try {
     return new URL(value).origin;
@@ -261,6 +291,16 @@ export function serializeDesignSystemPrompt(
     if (!value) continue;
     lines.push(`  ${token.inferredName}: ${value} (${token.detected.support} uses, ${token.nameBasis})`);
   }
+
+  lines.push('', 'Unavailable data:');
+  const unavailable = snapshot.unavailable.flatMap(safePromptUnavailable);
+  if (unavailable.length === 0) lines.push('  none reported');
+  for (const note of unavailable) lines.push(`  ${note}`);
+
+  lines.push('', 'Extraction limitations:');
+  const limitations = snapshot.limitations.flatMap(safePromptLimitation);
+  if (limitations.length === 0) lines.push('  none reported');
+  for (const note of limitations) lines.push(`  ${note}`);
 
   const limit = Math.max(0, Math.floor(maxChars));
   const full = lines.join('\n');

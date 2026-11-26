@@ -25,6 +25,7 @@ interface Props {
   metrics: PanelMetrics;
   copiedKey: string | null;
   error: string | null;
+  replayValid: boolean;
   onCopyText: (text: string, key?: string) => void;
   onReplay: (action: MotionReplayAction, animationId?: string) => void;
 }
@@ -180,11 +181,13 @@ function OverviewPanel({
 function AnimationsPanel({
   snapshot,
   copiedKey,
+  replayValid,
   onCopyText,
   onReplay,
 }: {
   snapshot: ElementSnapshot;
   copiedKey: string | null;
+  replayValid: boolean;
   onCopyText: (text: string, key?: string) => void;
   onReplay: (action: MotionReplayAction, animationId?: string) => void;
 }) {
@@ -239,7 +242,7 @@ function AnimationsPanel({
             <div className="flex min-w-0 items-center gap-2 border-t border-ink-800 px-2 py-1.5">
               <button
                 type="button"
-                disabled={!animation.replayable}
+                disabled={!replayValid || !animation.replayable}
                 onClick={() => onReplay('isolated-start', animation.id)}
                 className="flex-1 rounded border border-ink-700 px-2 py-1 text-[10px] text-fog-300 hover:border-accent-dim disabled:opacity-40"
               >
@@ -447,9 +450,11 @@ function EasingPanel({ snapshot }: { snapshot: ElementSnapshot }) {
 
 function ReplayPanel({
   snapshot,
+  replayValid,
   onReplay,
 }: {
   snapshot: ElementSnapshot;
+  replayValid: boolean;
   onReplay: (action: MotionReplayAction, animationId?: string) => void;
 }) {
   const { motion } = snapshot;
@@ -478,7 +483,7 @@ function ReplayPanel({
       <div className="grid gap-2 sm:grid-cols-2">
         <button
           type="button"
-          disabled={!activeId}
+          disabled={!replayValid || !activeId}
           onClick={() => onReplay('isolated-start', activeId || undefined)}
           className="rounded-md bg-accent px-2 py-2 text-[10px] font-medium text-ink-950 transition-colors hover:bg-accent-bright disabled:opacity-40"
         >
@@ -486,7 +491,7 @@ function ReplayPanel({
         </button>
         <button
           type="button"
-          disabled={!motion.replay.isolatedActiveId}
+          disabled={!replayValid || !motion.replay.isolatedActiveId}
           onClick={() => onReplay('isolated-stop')}
           className="rounded-md border border-ink-700 bg-ink-850 px-2 py-2 text-[10px] text-fog-200 hover:border-accent-dim disabled:opacity-40"
         >
@@ -494,7 +499,7 @@ function ReplayPanel({
         </button>
         <button
           type="button"
-          disabled={!activeId}
+          disabled={!replayValid || !activeId}
           onClick={() => onReplay('live-restart', activeId || undefined)}
           className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-2 text-[10px] text-amber-200 hover:border-amber-400 disabled:opacity-40"
         >
@@ -502,12 +507,17 @@ function ReplayPanel({
         </button>
         <button
           type="button"
-          disabled={!motion.replay.liveRestorableIds.length}
+          disabled={!replayValid || !motion.replay.liveRestorableIds.length}
           onClick={() => onReplay('live-restore')}
           className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-2 text-[10px] text-emerald-200 hover:border-emerald-400 disabled:opacity-40"
         >
           Restore original
         </button>
+        {!replayValid && (
+          <p className="sm:col-span-2 text-[10px] leading-relaxed text-amber-200">
+            Replay is no longer available for this selection. Capture an element again.
+          </p>
+        )}
       </div>
       <Section title="Current state" padding={0}>
         <Field label="Isolated" value={motion.replay.isolatedActiveId} labelWidth={68} long />
@@ -528,7 +538,7 @@ function ReplayPanel({
   );
 }
 
-export function MotionWorkspace({ snapshot, metrics, copiedKey, error, onCopyText, onReplay }: Props) {
+export function MotionWorkspace({ snapshot, metrics, copiedKey, error, replayValid, onCopyText, onReplay }: Props) {
   const [tab, setTab] = useState<MotionTab>('overview');
   const compact = metrics.layout === 'compact';
   const padding = metrics.contentPadding;
@@ -602,6 +612,7 @@ export function MotionWorkspace({ snapshot, metrics, copiedKey, error, onCopyTex
             <AnimationsPanel
               snapshot={snapshot}
               copiedKey={copiedKey}
+              replayValid={replayValid}
               onCopyText={onCopyText}
               onReplay={onReplay}
             />
@@ -613,7 +624,9 @@ export function MotionWorkspace({ snapshot, metrics, copiedKey, error, onCopyTex
             <KeyframesPanel snapshot={snapshot} copiedKey={copiedKey} onCopyText={onCopyText} />
           )}
           {tab === 'easing' && <EasingPanel snapshot={snapshot} />}
-          {tab === 'replay' && <ReplayPanel snapshot={snapshot} onReplay={onReplay} />}
+          {tab === 'replay' && (
+            <ReplayPanel snapshot={snapshot} replayValid={replayValid} onReplay={onReplay} />
+          )}
         </div>
       )}
     </main>

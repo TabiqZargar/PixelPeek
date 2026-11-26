@@ -61,7 +61,8 @@ export function useDesignSystem() {
       }
       if (event.type === MessageType.RuntimeError) {
         const requestId = pendingRef.current;
-        if (!requestId) return;
+        if (event.payload.source !== 'design-system' || !requestId) return;
+        if (event.payload.requestId !== requestId) return;
         fail(requestId, event.payload.message, event.payload.code ?? 'design-system-extraction-failed');
       }
     });

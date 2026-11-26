@@ -28,6 +28,7 @@ export function useInspector() {
   const [snapshot, setSnapshot] = useState<ElementSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [replayValid, setReplayValid] = useState(true);
 
   useEffect(() => {
     let mounted = true;
@@ -45,6 +46,7 @@ export function useInspector() {
           setStatus('idle');
           setCopiedKey(null);
           setError(null);
+          setReplayValid(true);
           break;
         case MessageType.SnapshotChanged:
           setSnapshot(event.payload);
@@ -52,16 +54,22 @@ export function useInspector() {
           setStatus('idle');
           setCopiedKey(null);
           setError(null);
+          setReplayValid(true);
           break;
         case MessageType.SelectionCleared:
           setSnapshot(null);
           setElement(null);
           setCopiedKey(null);
+          setReplayValid(false);
+          break;
+        case MessageType.ReplayInvalidated:
+          setReplayValid(false);
           break;
         case MessageType.StateChanged:
           setStatus(event.payload.active ? 'active' : 'idle');
           break;
         case MessageType.RuntimeError:
+          if (event.payload.source !== 'inspector') break;
           setError(event.payload.message);
           setStatus('error');
           break;
@@ -116,6 +124,10 @@ export function useInspector() {
   }, []);
 
   const replay = useCallback(async (action: MotionReplayAction, animationId?: string) => {
+    if (!replayValid) {
+      setError('Replay is no longer available for this selection. Capture an element again.');
+      return false;
+    }
     setError(null);
     try {
       await replayMotion(action, animationId);
@@ -124,7 +136,7 @@ export function useInspector() {
       setError(describe(cause));
       return false;
     }
-  }, []);
+  }, [replayValid]);
 
   const copyCss = useCallback(async () => {
     if (!element) return false;
@@ -139,6 +151,7 @@ export function useInspector() {
     error,
     copied: copiedKey === 'css',
     copiedKey,
+    replayValid,
     start,
     stop,
     navigate,
