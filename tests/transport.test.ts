@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MessageType } from '../src/shared/messages';
 import {
   extractDesignSystem,
+  extractWebsiteBlueprint,
   getInspectionState,
   getSnapshot,
   navigateHierarchy,
@@ -12,7 +13,7 @@ import {
   sendToBackground,
   sendToTab,
 } from '../src/shared/transport';
-import { makeDesignSystemSnapshot } from './fixtures';
+import { makeDesignSystemSnapshot, makeWebsiteBlueprint } from './fixtures';
 
 function stubChrome(overrides: Record<string, unknown> = {}) {
   const runtime = {
@@ -161,6 +162,56 @@ describe('Phase 4 design-system transport', () => {
     expect(listener).toHaveBeenCalledTimes(1);
 
     handler?.({ type: MessageType.DesignSystemChanged, payload: {} });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Phase 5 website blueprint transport', () => {
+  it('sends bounded extract requests through the typed contract', async () => {
+    const { runtime } = stubChrome();
+    runtime.sendMessage.mockResolvedValue({ ok: true });
+    await expect(extractWebsiteBlueprint('bp-1')).resolves.toEqual({ ok: true });
+    expect(runtime.sendMessage).toHaveBeenCalledWith({
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: 'bp-1',
+    });
+  });
+
+  it('rejects malformed extract requests before sending them', async () => {
+    const { runtime } = stubChrome();
+    await expect(extractWebsiteBlueprint('')).rejects.toThrow(/Invalid website blueprint request/);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed extraction acknowledgements', async () => {
+    const { runtime } = stubChrome();
+    runtime.sendMessage.mockResolvedValueOnce(undefined);
+    await expect(extractWebsiteBlueprint('bp-malformed')).rejects.toThrow(/Invalid response/);
+
+    runtime.sendMessage.mockResolvedValueOnce({ type: MessageType.Pong });
+    await expect(extractWebsiteBlueprint('bp-pong')).rejects.toThrow(/Invalid response/);
+
+    runtime.sendMessage.mockResolvedValueOnce({ ok: false, error: 'Blueprint failed', errorCode: 'blueprint-failed' });
+    await expect(extractWebsiteBlueprint('bp-failed')).rejects.toMatchObject({
+      name: 'ExtensionRequestError',
+      message: 'Blueprint failed',
+      code: 'blueprint-failed',
+    });
+  });
+
+  it('forwards only guarded blueprint events', () => {
+    const { runtime } = stubChrome();
+    const listener = vi.fn();
+    onPanelEvent(listener);
+    const handler = runtime.onMessage.addListener.mock.calls[0]?.[0] as
+      | ((message: unknown) => void)
+      | undefined;
+    expect(handler).toBeTypeOf('function');
+
+    handler?.({ type: MessageType.BlueprintChanged, payload: makeWebsiteBlueprint() });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    handler?.({ type: MessageType.BlueprintChanged, payload: {} });
     expect(listener).toHaveBeenCalledTimes(1);
   });
 });

@@ -303,7 +303,7 @@ export interface ReplayInvalidatedPayload {
 }
 
 export interface RuntimeErrorPayload {
-  source: 'inspector' | 'design-system';
+  source: 'inspector' | 'design-system' | 'website-blueprint';
   message: string;
   code?: string;
   requestId?: string;
@@ -396,4 +396,288 @@ export interface DesignSystemSnapshot {
   tokens: DesignTokenCandidate[];
   unavailable: string[];
   limitations: string[];
+}
+
+export const BLUEPRINT_SCHEMA_VERSION = '1.0' as const;
+
+export const BLUEPRINT_LIMITS = {
+  maxBlueprintElements: 600,
+  maxStructureNodes: 120,
+  maxSections: 40,
+  maxComponents: 80,
+  maxLayoutObservations: 120,
+  maxRefs: 200,
+  maxChildrenPerSection: 24,
+  maxEvidenceItemsPerObservation: 8,
+  maxUnavailable: 30,
+  maxLimitations: 30,
+  maxSelectorLength: 120,
+  maxValueLength: 240,
+  maxNameLength: 64,
+  maxPayloadChars: 60000,
+} as const;
+
+export const BLUEPRINT_EVIDENCE_STATUSES = ['detected', 'inferred', 'unknown'] as const;
+export const BLUEPRINT_EVIDENCE_SOURCES = [
+  'computed-style',
+  'stylesheet-declaration',
+  'geometry',
+  'motion-event',
+  'sampling',
+  'unavailable',
+] as const;
+export const BLUEPRINT_REF_CATEGORIES = ['region', 'section', 'component', 'layout', 'visual'] as const;
+export const BLUEPRINT_STRUCTURE_CATEGORIES = [
+  'banner',
+  'navigation',
+  'main',
+  'complementary',
+  'contentinfo',
+  'search',
+  'form',
+  'region',
+  'article',
+  'section',
+  'list',
+  'table',
+  'dialog',
+  'unknown',
+] as const;
+export const BLUEPRINT_COMPONENT_CATEGORIES = [
+  'button',
+  'link',
+  'card',
+  'form-control',
+  'image',
+  'icon',
+  'badge',
+  'avatar',
+  'list-item',
+  'table-row',
+  'media',
+  'unknown',
+] as const;
+export const BLUEPRINT_APPROVED_ROLES = [
+  'banner',
+  'navigation',
+  'main',
+  'complementary',
+  'contentinfo',
+  'search',
+  'form',
+  'region',
+  'article',
+  'section',
+  'heading',
+  'list',
+  'listitem',
+  'table',
+  'row',
+  'cell',
+  'button',
+  'link',
+  'img',
+  'dialog',
+  'alert',
+  'status',
+] as const;
+export const BLUEPRINT_DISPLAY_MODES = ['block', 'inline', 'flex', 'grid', 'table', 'positioned', 'unknown'] as const;
+export const BLUEPRINT_EXTRACTION_STATUSES = ['complete', 'partial', 'unavailable'] as const;
+
+export type BlueprintEvidenceStatus = (typeof BLUEPRINT_EVIDENCE_STATUSES)[number];
+export type BlueprintEvidenceSource = (typeof BLUEPRINT_EVIDENCE_SOURCES)[number];
+export type BlueprintRefCategory = (typeof BLUEPRINT_REF_CATEGORIES)[number];
+export type BlueprintStructureCategory = (typeof BLUEPRINT_STRUCTURE_CATEGORIES)[number];
+export type BlueprintComponentCategory = (typeof BLUEPRINT_COMPONENT_CATEGORIES)[number];
+export type BlueprintAriaRole = (typeof BLUEPRINT_APPROVED_ROLES)[number];
+export type BlueprintDisplayMode = (typeof BLUEPRINT_DISPLAY_MODES)[number];
+export type BlueprintExtractionStatus = (typeof BLUEPRINT_EXTRACTION_STATUSES)[number];
+
+export interface BlueprintEvidenceItem {
+  source: BlueprintEvidenceSource;
+  status: BlueprintEvidenceStatus;
+  note: string | null;
+}
+
+export interface BlueprintAvailability {
+  unavailable: string[];
+  limitations: string[];
+}
+
+export interface BlueprintViewport {
+  width: number;
+  height: number;
+  devicePixelRatio: number;
+}
+
+export interface BlueprintDocumentMetadata {
+  language: string | null;
+  colorScheme: string | null;
+  documentWidth: number;
+  documentHeight: number;
+  scrollWidth: number;
+  scrollHeight: number;
+}
+
+export interface BlueprintTruncation {
+  truncated: boolean;
+  reasons: string[];
+  limitsReached: string[];
+}
+
+export interface BlueprintMetadata {
+  schemaVersion: typeof BLUEPRINT_SCHEMA_VERSION;
+  capturedAt: string;
+  requestId: string;
+  origin: string;
+  viewport: BlueprintViewport;
+  document: BlueprintDocumentMetadata;
+  status: BlueprintExtractionStatus;
+  truncation: BlueprintTruncation;
+}
+
+export interface BlueprintLocalRef {
+  ref: string;
+  category: BlueprintRefCategory;
+}
+
+export interface BlueprintGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BlueprintStructureNode extends BlueprintAvailability {
+  ref: string;
+  kind: 'region' | 'section';
+  category: BlueprintStructureCategory;
+  role: BlueprintAriaRole | null;
+  parentRef: string | null;
+  childRefs: string[];
+  geometry: BlueprintGeometry;
+  evidence: BlueprintEvidenceItem[];
+}
+
+export interface BlueprintStructure extends BlueprintAvailability {
+  nodes: BlueprintStructureNode[];
+  sectionRefs: string[];
+}
+
+export interface BlueprintComponentExample extends BlueprintAvailability {
+  ref: string;
+  selectorHint: string | null;
+  geometry: BlueprintGeometry;
+  evidence: BlueprintEvidenceItem[];
+}
+
+export interface BlueprintComponent extends BlueprintAvailability {
+  ref: string;
+  category: BlueprintComponentCategory;
+  occurrenceCount: number;
+  sectionRefs: string[];
+  examples: BlueprintComponentExample[];
+  evidence: BlueprintEvidenceItem[];
+}
+
+export interface BlueprintFlexObservation {
+  direction: string | null;
+  wrap: string | null;
+  alignItems: string | null;
+  justifyContent: string | null;
+}
+
+export interface BlueprintGridObservation {
+  templateColumns: string | null;
+  templateRows: string | null;
+  rowGap: string | null;
+  columnGap: string | null;
+}
+
+export interface BlueprintLayoutObservation extends BlueprintAvailability {
+  ref: string;
+  targetRef: string;
+  display: BlueprintDisplayMode;
+  dimensions: {
+    width: string | null;
+    height: string | null;
+    minWidth: string | null;
+    maxWidth: string | null;
+  };
+  alignment: {
+    alignItems: string | null;
+    alignSelf: string | null;
+    justifyContent: string | null;
+    justifySelf: string | null;
+    textAlign: string | null;
+  };
+  gaps: {
+    rowGap: string | null;
+    columnGap: string | null;
+  };
+  positioning: {
+    position: string | null;
+    top: string | null;
+    right: string | null;
+    bottom: string | null;
+    left: string | null;
+    zIndex: string | null;
+  };
+  flex: BlueprintFlexObservation | null;
+  grid: BlueprintGridObservation | null;
+  evidence: BlueprintEvidenceItem[];
+}
+
+export interface BlueprintMotionObservation extends BlueprintAvailability {
+  ref: string;
+  targetRef: string;
+  source: MotionSource;
+  category: BlueprintComponentCategory | BlueprintStructureCategory;
+  role: BlueprintAriaRole | null;
+  name: string | null;
+  timing: MotionTiming;
+  properties: MotionKeyframeProperty[];
+  evidence: BlueprintEvidenceItem[];
+}
+
+export interface BlueprintMotion extends BlueprintAvailability {
+  summary: MotionSummary;
+  observations: BlueprintMotionObservation[];
+  easings: EasingInfo[];
+  reducedMotion: boolean;
+}
+
+export interface BlueprintResponsive extends BlueprintAvailability {
+  observedViewport: BlueprintViewport;
+  observedBreakpoints: string[];
+  unobservedBreakpoints: string[];
+  unobservedViewportStates: string[];
+  evidence: BlueprintEvidenceItem[];
+}
+
+export interface BlueprintVisualReference extends BlueprintAvailability {
+  ref: string;
+  targetRef: string;
+  geometry: BlueprintGeometry;
+  descriptors: string[];
+  evidence: BlueprintEvidenceItem[];
+}
+
+export interface BlueprintEvidence {
+  items: BlueprintEvidenceItem[];
+  unavailable: string[];
+  limitations: string[];
+}
+
+export interface WebsiteBlueprint {
+  metadata: BlueprintMetadata;
+  refs: BlueprintLocalRef[];
+  structure: BlueprintStructure;
+  components: BlueprintComponent[];
+  layout: BlueprintLayoutObservation[];
+  designSystem: DesignSystemSnapshot;
+  motion: BlueprintMotion;
+  responsive: BlueprintResponsive;
+  visualReferences: BlueprintVisualReference[];
+  evidence: BlueprintEvidence;
 }

@@ -1,8 +1,10 @@
 import type {
+  BlueprintEvidence,
   DesignSystemSnapshot,
   ElementInfo,
   ElementSnapshot,
   MotionSnapshot,
+  WebsiteBlueprint,
 } from '../src/shared/types';
 
 export function makeElementInfo(overrides: Partial<ElementInfo> = {}): ElementInfo {
@@ -255,6 +257,177 @@ export function makeSnapshot(overrides: Partial<ElementSnapshot> = {}): ElementS
     motion: makeMotionSnapshot(),
     limitations: ['computed values only'],
     capturedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+export function makeBlueprintEvidence(overrides: Partial<BlueprintEvidence> = {}): BlueprintEvidence {
+  return {
+    items: [{ source: 'sampling', status: 'detected', note: null }],
+    unavailable: [],
+    limitations: [],
+    ...overrides,
+  };
+}
+
+export function makeWebsiteBlueprint(overrides: Partial<WebsiteBlueprint> = {}): WebsiteBlueprint {
+  const evidence = [{ source: 'sampling', status: 'detected', note: null }] as const;
+  const geometry = { x: 0, y: 0, width: 1200, height: 640 };
+  return {
+    metadata: {
+      schemaVersion: '1.0',
+      capturedAt: '2026-01-01T00:00:00.000Z',
+      requestId: 'bp-1',
+      origin: 'https://example.com',
+      viewport: { width: 1280, height: 720, devicePixelRatio: 1 },
+      document: {
+        language: 'en-US',
+        colorScheme: 'light',
+        documentWidth: 1280,
+        documentHeight: 1800,
+        scrollWidth: 1280,
+        scrollHeight: 1800,
+      },
+      status: 'complete',
+      truncation: { truncated: false, reasons: [], limitsReached: [] },
+    },
+    refs: [
+      { ref: 'ref-1', category: 'region' },
+      { ref: 'ref-2', category: 'section' },
+      { ref: 'ref-3', category: 'component' },
+      { ref: 'ref-4', category: 'layout' },
+      { ref: 'ref-5', category: 'visual' },
+    ],
+    structure: {
+      nodes: [
+        {
+          ref: 'ref-1',
+          kind: 'region',
+          category: 'banner',
+          role: 'banner',
+          parentRef: null,
+          childRefs: ['ref-2'],
+          geometry: { x: 0, y: 0, width: 1200, height: 64 },
+          evidence: [{ source: 'geometry', status: 'detected', note: null }],
+          unavailable: [],
+          limitations: [],
+        },
+        {
+          ref: 'ref-2',
+          kind: 'section',
+          category: 'main',
+          role: 'main',
+          parentRef: 'ref-1',
+          childRefs: [],
+          geometry,
+          evidence: [{ source: 'sampling', status: 'inferred', note: 'Category was inferred from structure' }],
+          unavailable: [],
+          limitations: [],
+        },
+      ],
+      sectionRefs: ['ref-2'],
+      unavailable: [],
+      limitations: [],
+    },
+    components: [
+      {
+        ref: 'ref-3',
+        category: 'button',
+        occurrenceCount: 2,
+        sectionRefs: ['ref-2'],
+        examples: [
+          {
+            ref: 'ref-3',
+            selectorHint: 'button.card',
+            geometry: { x: 24, y: 96, width: 120, height: 40 },
+            evidence: [{ source: 'computed-style', status: 'detected', note: null }],
+            unavailable: [],
+            limitations: [],
+          },
+        ],
+        evidence: [{ source: 'sampling', status: 'detected', note: null }],
+        unavailable: [],
+        limitations: [],
+      },
+    ],
+    layout: [
+      {
+        ref: 'ref-4',
+        targetRef: 'ref-2',
+        display: 'flex',
+        dimensions: {
+          width: '100%',
+          height: 'auto',
+          minWidth: null,
+          maxWidth: '1200px',
+        },
+        alignment: {
+          alignItems: 'center',
+          alignSelf: null,
+          justifyContent: 'space-between',
+          justifySelf: null,
+          textAlign: null,
+        },
+        gaps: { rowGap: '8px', columnGap: '8px' },
+        positioning: {
+          position: 'relative',
+          top: '0px',
+          right: '0px',
+          bottom: '0px',
+          left: '0px',
+          zIndex: null,
+        },
+        flex: {
+          direction: 'row',
+          wrap: 'nowrap',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        },
+        grid: null,
+        evidence: [{ source: 'computed-style', status: 'detected', note: null }],
+        unavailable: [],
+        limitations: [],
+      },
+    ],
+    designSystem: makeDesignSystemSnapshot(),
+    motion: {
+      summary: {
+        animationCount: 0,
+        cssAnimationCount: 0,
+        transitionCount: 0,
+        waapiCount: 0,
+        runningCount: 0,
+        keyframeSetCount: 0,
+        reducedMotion: false,
+        animatedProperties: [],
+      },
+      observations: [],
+      easings: [],
+      reducedMotion: false,
+      unavailable: ['Motion was not active during capture'],
+      limitations: ['Observed motion is time dependent'],
+    },
+    responsive: {
+      observedViewport: { width: 1280, height: 720, devicePixelRatio: 1 },
+      observedBreakpoints: ['current viewport'],
+      unobservedBreakpoints: ['smaller breakpoints were not observed'],
+      unobservedViewportStates: ['hover and focus states were not observed'],
+      evidence: [...evidence],
+      unavailable: [],
+      limitations: [],
+    },
+    visualReferences: [
+      {
+        ref: 'ref-5',
+        targetRef: 'ref-2',
+        geometry,
+        descriptors: ['display flex', 'gap 8px'],
+        evidence: [{ source: 'geometry', status: 'detected', note: null }],
+        unavailable: [],
+        limitations: [],
+      },
+    ],
+    evidence: makeBlueprintEvidence(),
     ...overrides,
   };
 }

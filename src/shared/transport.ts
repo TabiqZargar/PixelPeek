@@ -4,6 +4,7 @@ import {
   isDesignSystemRequest,
   isRequestResult,
   isStateResult,
+  isWebsiteBlueprintRequest,
   type ContentEvent,
   type ContentRequest,
   type PanelRequest,
@@ -71,6 +72,12 @@ export async function replayMotion(action: MotionReplayAction, animationId?: str
 export async function extractDesignSystem(requestId: string): Promise<RequestResult> {
   const request = { type: MessageType.ExtractDesignSystem, requestId } as const;
   if (!isDesignSystemRequest(request)) throw new Error('Invalid design-system request.');
+  return sendToBackground(request);
+}
+
+export async function extractWebsiteBlueprint(requestId: string): Promise<RequestResult> {
+  const request = { type: MessageType.ExtractWebsiteBlueprint, requestId } as const;
+  if (!isWebsiteBlueprintRequest(request)) throw new Error('Invalid website blueprint request.');
   return sendToBackground(request);
 }
 

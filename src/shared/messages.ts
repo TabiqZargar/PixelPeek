@@ -1,9 +1,21 @@
 import {
+  BLUEPRINT_APPROVED_ROLES,
+  BLUEPRINT_COMPONENT_CATEGORIES,
+  BLUEPRINT_DISPLAY_MODES,
+  BLUEPRINT_EVIDENCE_SOURCES,
+  BLUEPRINT_EVIDENCE_STATUSES,
+  BLUEPRINT_EXTRACTION_STATUSES,
+  BLUEPRINT_LIMITS,
+  BLUEPRINT_REF_CATEGORIES,
+  BLUEPRINT_SCHEMA_VERSION,
+  BLUEPRINT_STRUCTURE_CATEGORIES,
   DESIGN_SYSTEM_CATEGORIES,
   DESIGN_SYSTEM_LIMITS,
   type DesignSystemSnapshot,
+  type WebsiteBlueprint,
 } from './types';
 import type {
+  BlueprintEvidenceItem,
   ElementInfo,
   ElementSnapshot,
   HierarchyDirection,
@@ -32,6 +44,8 @@ export const MessageType = {
   ReplayMotion: 'pixelpeek/replay-motion',
   ExtractDesignSystem: 'pixelpeek/extract-design-system',
   DesignSystemChanged: 'pixelpeek/design-system-changed',
+  ExtractWebsiteBlueprint: 'pixelpeek/extract-website-blueprint',
+  BlueprintChanged: 'pixelpeek/blueprint-changed',
 } as const;
 
 export type MessageTypeValue = (typeof MessageType)[keyof typeof MessageType];
@@ -43,7 +57,8 @@ export type PanelRequest =
   | { type: typeof MessageType.GetSnapshot }
   | { type: typeof MessageType.NavigateHierarchy; direction: HierarchyDirection; index?: number }
   | { type: typeof MessageType.ReplayMotion; action: MotionReplayAction; animationId?: string }
-  | { type: typeof MessageType.ExtractDesignSystem; requestId: string };
+  | { type: typeof MessageType.ExtractDesignSystem; requestId: string }
+  | { type: typeof MessageType.ExtractWebsiteBlueprint; requestId: string };
 
 export type ContentRequest =
   | { type: typeof MessageType.Ping }
@@ -52,7 +67,8 @@ export type ContentRequest =
   | { type: typeof MessageType.GetSnapshot }
   | { type: typeof MessageType.NavigateHierarchy; direction: HierarchyDirection; index?: number }
   | { type: typeof MessageType.ReplayMotion; action: MotionReplayAction; animationId?: string }
-  | { type: typeof MessageType.ExtractDesignSystem; requestId: string };
+  | { type: typeof MessageType.ExtractDesignSystem; requestId: string }
+  | { type: typeof MessageType.ExtractWebsiteBlueprint; requestId: string };
 
 export type ContentEvent =
   | { type: typeof MessageType.Pong }
@@ -62,7 +78,8 @@ export type ContentEvent =
   | { type: typeof MessageType.SnapshotChanged; payload: ElementSnapshot }
   | { type: typeof MessageType.SelectionCleared; payload: SelectionClearedPayload }
   | { type: typeof MessageType.ReplayInvalidated; payload: ReplayInvalidatedPayload }
-  | { type: typeof MessageType.DesignSystemChanged; payload: DesignSystemSnapshot };
+  | { type: typeof MessageType.DesignSystemChanged; payload: DesignSystemSnapshot }
+  | { type: typeof MessageType.BlueprintChanged; payload: WebsiteBlueprint };
 
 export type PanelEvent = Exclude<ContentEvent, { type: typeof MessageType.Pong }>;
 
@@ -412,6 +429,464 @@ export function isDesignSystemSnapshot(value: unknown): value is DesignSystemSna
   return serialized.length <= DESIGN_SYSTEM_LIMITS.maxPayloadChars;
 }
 
+function isBlueprintEnum<T extends string>(value: unknown, values: readonly T[]): value is T {
+  return typeof value === 'string' && values.includes(value as T);
+}
+
+function isBlueprintFiniteNumber(value: unknown, min = -1000000, max = 1000000): boolean {
+  return isFiniteNumber(value) && value >= min && value <= max;
+}
+
+function isBlueprintRef(value: unknown): boolean {
+  return typeof value === 'string' && /^ref-[1-9][0-9]{0,2}$/.test(value);
+}
+
+function isBlueprintBoundedCss(value: unknown): boolean {
+  return value === null ||
+    (isBoundedString(value, BLUEPRINT_LIMITS.maxValueLength) && !hasUnsafeCss(value));
+}
+
+function isBlueprintName(value: unknown): boolean {
+  return value === null ||
+    (isBoundedString(value, BLUEPRINT_LIMITS.maxNameLength) && !hasUnsafeCss(value));
+}
+
+function isBlueprintNote(value: unknown): boolean {
+  return value === null || isBlueprintBoundedCss(value);
+}
+
+function isBlueprintNotes(value: unknown, max: number): boolean {
+  return isBoundedStringArray(value, BLUEPRINT_LIMITS.maxValueLength, max) &&
+    (value as string[]).every((note) => !hasUnsafeCss(note));
+}
+
+function isBlueprintEvidenceItem(value: unknown): value is BlueprintEvidenceItem {
+  return isRecord(value) &&
+    isBlueprintEnum(value.source, BLUEPRINT_EVIDENCE_SOURCES) &&
+    isBlueprintEnum(value.status, BLUEPRINT_EVIDENCE_STATUSES) &&
+    isBlueprintNote(value.note);
+}
+
+function isBlueprintEvidenceItems(value: unknown): boolean {
+  return Array.isArray(value) &&
+    value.length <= BLUEPRINT_LIMITS.maxEvidenceItemsPerObservation &&
+    value.every(isBlueprintEvidenceItem);
+}
+
+function isBlueprintAvailability(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return isBlueprintNotes(value.unavailable, BLUEPRINT_LIMITS.maxUnavailable) &&
+    isBlueprintNotes(value.limitations, BLUEPRINT_LIMITS.maxLimitations);
+}
+
+function isBlueprintViewport(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return isBlueprintFiniteNumber(value.width, 0) &&
+    isBlueprintFiniteNumber(value.height, 0) &&
+    isBlueprintFiniteNumber(value.devicePixelRatio, 0, 100);
+}
+
+function isBlueprintDocumentMetadata(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return isBlueprintName(value.language) &&
+    isBlueprintName(value.colorScheme) &&
+    isBlueprintFiniteNumber(value.documentWidth, 0) &&
+    isBlueprintFiniteNumber(value.documentHeight, 0) &&
+    isBlueprintFiniteNumber(value.scrollWidth, 0) &&
+    isBlueprintFiniteNumber(value.scrollHeight, 0);
+}
+
+function isBlueprintTruncation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (typeof value.truncated !== 'boolean') return false;
+  return isBlueprintNotes(value.reasons, BLUEPRINT_LIMITS.maxLimitations) &&
+    isBlueprintNotes(value.limitsReached, BLUEPRINT_LIMITS.maxLimitations);
+}
+
+function isBlueprintMetadata(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.schemaVersion !== BLUEPRINT_SCHEMA_VERSION) return false;
+  if (!isBoundedString(value.capturedAt, BLUEPRINT_LIMITS.maxValueLength)) return false;
+  if (!isBoundedString(value.requestId, BLUEPRINT_LIMITS.maxNameLength)) return false;
+  if (!isOrigin(value.origin)) return false;
+  if (!isBlueprintViewport(value.viewport)) return false;
+  if (!isBlueprintDocumentMetadata(value.document)) return false;
+  if (!isBlueprintEnum(value.status, BLUEPRINT_EXTRACTION_STATUSES)) return false;
+  return isBlueprintTruncation(value.truncation);
+}
+
+function isBlueprintLocalRef(value: unknown): boolean {
+  return isRecord(value) &&
+    isBlueprintRef(value.ref) &&
+    isBlueprintEnum(value.category, BLUEPRINT_REF_CATEGORIES);
+}
+
+function isBlueprintGeometry(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return isBlueprintFiniteNumber(value.x) &&
+    isBlueprintFiniteNumber(value.y) &&
+    isBlueprintFiniteNumber(value.width, 0) &&
+    isBlueprintFiniteNumber(value.height, 0);
+}
+
+function isBlueprintRole(value: unknown): boolean {
+  return value === null || isBlueprintEnum(value, BLUEPRINT_APPROVED_ROLES);
+}
+
+function isBlueprintRefArray(value: unknown, max: number): boolean {
+  return Array.isArray(value) && value.length <= max && value.every(isBlueprintRef);
+}
+
+function isBlueprintStructureNode(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBlueprintRef(value.ref)) return false;
+  if (value.kind !== 'region' && value.kind !== 'section') return false;
+  if (!isBlueprintEnum(value.category, BLUEPRINT_STRUCTURE_CATEGORIES)) return false;
+  if (!isBlueprintRole(value.role)) return false;
+  if (value.parentRef !== null && !isBlueprintRef(value.parentRef)) return false;
+  if (!isBlueprintRefArray(value.childRefs, BLUEPRINT_LIMITS.maxChildrenPerSection)) return false;
+  if (!isBlueprintGeometry(value.geometry)) return false;
+  if (!isBlueprintEvidenceItems(value.evidence)) return false;
+  return isBlueprintAvailability(value);
+}
+
+function isBlueprintStructure(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!Array.isArray(value.nodes) ||
+    value.nodes.length > BLUEPRINT_LIMITS.maxStructureNodes ||
+    !value.nodes.every(isBlueprintStructureNode)
+  ) {
+    return false;
+  }
+  if (!isBlueprintRefArray(value.sectionRefs, BLUEPRINT_LIMITS.maxSections)) return false;
+  return isBlueprintAvailability(value);
+}
+
+function isBlueprintComponentExample(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBlueprintRef(value.ref)) return false;
+  if (value.selectorHint !== null && !isBoundedSelector(value.selectorHint)) return false;
+  if (!isBlueprintGeometry(value.geometry)) return false;
+  if (!isBlueprintEvidenceItems(value.evidence)) return false;
+  return isBlueprintAvailability(value);
+}
+
+function isBlueprintComponent(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBlueprintRef(value.ref)) return false;
+  if (!isBlueprintEnum(value.category, BLUEPRINT_COMPONENT_CATEGORIES)) return false;
+  if (!isIntegerInRange(value.occurrenceCount, 0, BLUEPRINT_LIMITS.maxBlueprintElements)) return false;
+  if (!isBlueprintRefArray(value.sectionRefs, BLUEPRINT_LIMITS.maxSections)) return false;
+  if (!Array.isArray(value.examples) ||
+    value.examples.length > BLUEPRINT_LIMITS.maxEvidenceItemsPerObservation ||
+    !value.examples.every(isBlueprintComponentExample)
+  ) {
+    return false;
+  }
+  if (!isBlueprintEvidenceItems(value.evidence)) return false;
+  return isBlueprintAvailability(value);
+}
+
+function isBlueprintFlex(value: unknown): boolean {
+  return value === null || (
+    isRecord(value) &&
+    isBlueprintBoundedCss(value.direction) &&
+    isBlueprintBoundedCss(value.wrap) &&
+    isBlueprintBoundedCss(value.alignItems) &&
+    isBlueprintBoundedCss(value.justifyContent)
+  );
+}
+
+function isBlueprintGrid(value: unknown): boolean {
+  return value === null || (
+    isRecord(value) &&
+    isBlueprintBoundedCss(value.templateColumns) &&
+    isBlueprintBoundedCss(value.templateRows) &&
+    isBlueprintBoundedCss(value.rowGap) &&
+    isBlueprintBoundedCss(value.columnGap)
+  );
+}
+
+function isBlueprintLayoutObservation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBlueprintRef(value.ref) || !isBlueprintRef(value.targetRef)) return false;
+  if (!isBlueprintEnum(value.display, BLUEPRINT_DISPLAY_MODES)) return false;
+  if (!isRecord(value.dimensions) || !isRecord(value.alignment) ||
+    !isRecord(value.gaps) || !isRecord(value.positioning)
+  ) {
+    return false;
+  }
+  const dimensions = value.dimensions as Record<string, unknown>;
+  if (!['width', 'height', 'minWidth', 'maxWidth'].every((key) =>
+    isBlueprintBoundedCss(dimensions[key]),
+  )) {
+    return false;
+  }
+  const alignment = value.alignment as Record<string, unknown>;
+  if (!['alignItems', 'alignSelf', 'justifyContent', 'justifySelf', 'textAlign'].every((key) =>
+    isBlueprintBoundedCss(alignment[key]),
+  )) {
+    return false;
+  }
+  const gaps = value.gaps as Record<string, unknown>;
+  if (!isBlueprintBoundedCss(gaps.rowGap) || !isBlueprintBoundedCss(gaps.columnGap)) return false;
+  const positioning = value.positioning as Record<string, unknown>;
+  if (!['position', 'top', 'right', 'bottom', 'left', 'zIndex'].every((key) =>
+    isBlueprintBoundedCss(positioning[key]),
+  )) {
+    return false;
+  }
+  if (!isBlueprintFlex(value.flex) || !isBlueprintGrid(value.grid)) return false;
+  if (!isBlueprintEvidenceItems(value.evidence)) return false;
+  return isBlueprintAvailability(value);
+}
+
+function isBlueprintMotionSummary(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  for (const key of [
+    'animationCount',
+    'cssAnimationCount',
+    'transitionCount',
+    'waapiCount',
+    'runningCount',
+    'keyframeSetCount',
+  ]) {
+    if (!isFiniteNumber(value[key]) || (value[key] as number) < 0) return false;
+  }
+  return typeof value.reducedMotion === 'boolean' && isStringArray(value.animatedProperties);
+}
+
+function isBlueprintMotionObservation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBlueprintRef(value.ref) || !isBlueprintRef(value.targetRef)) return false;
+  if (!['css-animation', 'css-transition', 'waapi'].includes(String(value.source))) return false;
+  if (!isBlueprintEnum(value.category, [...BLUEPRINT_COMPONENT_CATEGORIES, ...BLUEPRINT_STRUCTURE_CATEGORIES])) {
+    return false;
+  }
+  if (!isBlueprintRole(value.role) || !isBlueprintName(value.name)) return false;
+  if (!isMotionTiming(value.timing)) return false;
+  if (!Array.isArray(value.properties) ||
+    value.properties.length > BLUEPRINT_LIMITS.maxEvidenceItemsPerObservation ||
+    !value.properties.every(isMotionKeyframeProperty)
+  ) {
+    return false;
+  }
+  if (!isBlueprintEvidenceItems(value.evidence)) return false;
+  return isBlueprintAvailability(value);
+}
+
+function isBlueprintMotion(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBlueprintMotionSummary(value.summary)) return false;
+  if (!Array.isArray(value.observations) ||
+    value.observations.length > BLUEPRINT_LIMITS.maxLayoutObservations ||
+    !value.observations.every(isBlueprintMotionObservation)
+  ) {
+    return false;
+  }
+  if (!Array.isArray(value.easings) ||
+    value.easings.length > BLUEPRINT_LIMITS.maxEvidenceItemsPerObservation ||
+    !value.easings.every(isEasingInfo)
+  ) {
+    return false;
+  }
+  if (typeof value.reducedMotion !== 'boolean') return false;
+  return isBlueprintAvailability(value);
+}
+
+function isBlueprintResponsive(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBlueprintViewport(value.observedViewport)) return false;
+  if (!isBlueprintNotes(value.observedBreakpoints, BLUEPRINT_LIMITS.maxLimitations)) return false;
+  if (!isBlueprintNotes(value.unobservedBreakpoints, BLUEPRINT_LIMITS.maxLimitations)) return false;
+  if (!isBlueprintNotes(value.unobservedViewportStates, BLUEPRINT_LIMITS.maxLimitations)) return false;
+  if (!isBlueprintEvidenceItems(value.evidence)) return false;
+  return isBlueprintAvailability(value);
+}
+
+function isBlueprintVisualReference(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBlueprintRef(value.ref) || !isBlueprintRef(value.targetRef)) return false;
+  if (!isBlueprintGeometry(value.geometry)) return false;
+  if (!isBlueprintNotes(value.descriptors, BLUEPRINT_LIMITS.maxEvidenceItemsPerObservation)) return false;
+  if (!isBlueprintEvidenceItems(value.evidence)) return false;
+  return isBlueprintAvailability(value);
+}
+
+function isBlueprintEvidence(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (!isBlueprintEvidenceItems(value.items)) return false;
+  return isBlueprintAvailability(value);
+}
+
+const BLUEPRINT_FORBIDDEN_KEYS = new Set([
+  'accessibleName',
+  'ariaLabel',
+  'base64',
+  'blob',
+  'dataUrl',
+  'formValue',
+  'fragment',
+  'fullUrl',
+  'hash',
+  'href',
+  'innerHTML',
+  'innerText',
+  'inputValue',
+  'isolatedActiveId',
+  'liveRestorableIds',
+  'outerHTML',
+  'password',
+  'pathname',
+  'placeholder',
+  'query',
+  'replay',
+  'replayable',
+  'screenshot',
+  'screenshotPath',
+  'search',
+  'src',
+  'text',
+  'textContent',
+  'title',
+]);
+
+function hasUnsafeBlueprintString(value: unknown, key: string): boolean {
+  if (typeof value !== 'string') return false;
+  if (value.length > BLUEPRINT_LIMITS.maxValueLength) return true;
+  if (hasUnsafeCss(value)) return true;
+  if (key !== 'origin' && key !== 'capturedAt' &&
+    /^(?:https?|file|data|javascript|chrome-extension|about):/i.test(value)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function hasForbiddenBlueprintValue(value: unknown, key = '', stack = new WeakSet<object>()): boolean {
+  if (hasUnsafeBlueprintString(value, key)) return true;
+  if (typeof value !== 'object' || value === null) return false;
+  if (stack.has(value)) return true;
+  stack.add(value);
+  if (Array.isArray(value)) {
+    const found = value.some((entry) => hasForbiddenBlueprintValue(entry, key, stack));
+    stack.delete(value);
+    return found;
+  }
+  if (!isRecord(value)) {
+    stack.delete(value);
+    return false;
+  }
+  for (const [childKey, child] of Object.entries(value)) {
+    if (BLUEPRINT_FORBIDDEN_KEYS.has(childKey) || hasForbiddenBlueprintValue(child, childKey, stack)) {
+      stack.delete(value);
+      return true;
+    }
+  }
+  stack.delete(value);
+  return false;
+}
+
+function hasValidBlueprintRefs(value: WebsiteBlueprint): boolean {
+  const refs = value.refs.map((entry) => entry.ref);
+  const refSet = new Set(refs);
+  if (refSet.size !== refs.length) return false;
+  if (!value.structure.nodes.every((node) => refSet.has(node.ref))) return false;
+  if (!value.structure.sectionRefs.every((ref) => refSet.has(ref))) return false;
+  if (!value.components.every((component) =>
+    refSet.has(component.ref) && component.sectionRefs.every((ref) => refSet.has(ref)) &&
+    component.examples.every((example) => refSet.has(example.ref))
+  )) {
+    return false;
+  }
+  if (!value.layout.every((observation) =>
+    refSet.has(observation.ref) && refSet.has(observation.targetRef)
+  )) {
+    return false;
+  }
+  if (!value.motion.observations.every((observation) =>
+    refSet.has(observation.ref) && refSet.has(observation.targetRef)
+  )) {
+    return false;
+  }
+  if (!value.visualReferences.every((reference) =>
+    refSet.has(reference.ref) && refSet.has(reference.targetRef)
+  )) {
+    return false;
+  }
+
+  const nodeByRef = new Map(value.structure.nodes.map((node) => [node.ref, node]));
+  for (const node of value.structure.nodes) {
+    if (node.parentRef !== null) {
+      if (!refSet.has(node.parentRef) || node.parentRef === node.ref) return false;
+    }
+    if (node.childRefs.some((child) => !refSet.has(child) || child === node.ref)) return false;
+    for (const child of node.childRefs) {
+      const childNode = nodeByRef.get(child);
+      if (childNode && childNode.parentRef !== node.ref) return false;
+    }
+    const visited = new Set<string>();
+    let current: string | null = node.ref;
+    while (current !== null) {
+      if (visited.has(current)) return false;
+      visited.add(current);
+      current = nodeByRef.get(current)?.parentRef ?? null;
+    }
+  }
+  return true;
+}
+
+export function isWebsiteBlueprint(value: unknown): value is WebsiteBlueprint {
+  if (!isRecord(value)) return false;
+  if (!isBlueprintMetadata(value.metadata)) return false;
+  if (!Array.isArray(value.refs) ||
+    value.refs.length > BLUEPRINT_LIMITS.maxRefs ||
+    !value.refs.every(isBlueprintLocalRef)
+  ) {
+    return false;
+  }
+  if (!isBlueprintStructure(value.structure)) return false;
+  if (!Array.isArray(value.components) ||
+    value.components.length > BLUEPRINT_LIMITS.maxComponents ||
+    !value.components.every(isBlueprintComponent)
+  ) {
+    return false;
+  }
+  if (!Array.isArray(value.layout) ||
+    value.layout.length > BLUEPRINT_LIMITS.maxLayoutObservations ||
+    !value.layout.every(isBlueprintLayoutObservation)
+  ) {
+    return false;
+  }
+  if (!isDesignSystemSnapshot(value.designSystem)) return false;
+  if (value.designSystem.origin !== (value.metadata as Record<string, unknown>).origin) return false;
+  if (!isBlueprintMotion(value.motion)) return false;
+  if (!isBlueprintResponsive(value.responsive)) return false;
+  if (!Array.isArray(value.visualReferences) ||
+    value.visualReferences.length > BLUEPRINT_LIMITS.maxSections ||
+    !value.visualReferences.every(isBlueprintVisualReference)
+  ) {
+    return false;
+  }
+  if (!isBlueprintEvidence(value.evidence)) return false;
+  if (hasForbiddenBlueprintValue(value)) return false;
+  if (!hasValidBlueprintRefs(value as unknown as WebsiteBlueprint)) return false;
+  try {
+    return JSON.stringify(value).length <= BLUEPRINT_LIMITS.maxPayloadChars;
+  } catch {
+    return false;
+  }
+}
+
+export function isWebsiteBlueprintRequest(value: unknown): value is {
+  type: typeof MessageType.ExtractWebsiteBlueprint;
+  requestId: string;
+} {
+  return isRecord(value) &&
+    value.type === MessageType.ExtractWebsiteBlueprint &&
+    isBoundedString(value.requestId, BLUEPRINT_LIMITS.maxNameLength);
+}
+
 function isDimensions(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
@@ -575,11 +1050,16 @@ export function isReplayInvalidatedPayload(value: unknown): value is ReplayInval
 
 export function isRuntimeErrorPayload(value: unknown): value is RuntimeErrorPayload {
   if (!isRecord(value)) return false;
-  if (value.source !== 'inspector' && value.source !== 'design-system') return false;
+  if (value.source !== 'inspector' && value.source !== 'design-system' && value.source !== 'website-blueprint') {
+    return false;
+  }
   if (!isNonEmptyString(value.message)) return false;
   if (value.code !== undefined && typeof value.code !== 'string') return false;
   if (value.source === 'design-system') {
     return isBoundedString(value.requestId, DESIGN_SYSTEM_LIMITS.maxRequestIdLength);
+  }
+  if (value.source === 'website-blueprint') {
+    return isBoundedString(value.requestId, BLUEPRINT_LIMITS.maxNameLength);
   }
   return value.requestId === undefined ||
     isBoundedString(value.requestId, DESIGN_SYSTEM_LIMITS.maxRequestIdLength);
@@ -612,6 +1092,8 @@ export function isPanelEvent(value: unknown): value is PanelEvent {
       return isReplayInvalidatedPayload(value.payload);
     case MessageType.DesignSystemChanged:
       return isDesignSystemSnapshot(value.payload);
+    case MessageType.BlueprintChanged:
+      return isWebsiteBlueprint(value.payload);
     default:
       return false;
   }
@@ -660,6 +1142,8 @@ export function isPanelRequest(value: unknown): value is PanelRequest {
         (value.animationId === undefined || isNonEmptyString(value.animationId));
     case MessageType.ExtractDesignSystem:
       return isDesignSystemRequest(value);
+    case MessageType.ExtractWebsiteBlueprint:
+      return isWebsiteBlueprintRequest(value);
     default:
       return false;
   }
