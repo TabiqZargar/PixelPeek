@@ -15,6 +15,33 @@ export type DesignSystemLimits = {
   [Key in keyof typeof DESIGN_SYSTEM_LIMITS]: number;
 };
 
+export const BLUEPRINT_LAYOUT_PROPERTIES = [
+  'display',
+  'visibility',
+  'position',
+  'top',
+  'right',
+  'bottom',
+  'left',
+  'z-index',
+  'min-width',
+  'max-width',
+  'align-items',
+  'align-self',
+  'justify-content',
+  'justify-self',
+  'text-align',
+  'row-gap',
+  'column-gap',
+  'gap',
+  'flex-direction',
+  'flex-wrap',
+  'grid-template-columns',
+  'grid-template-rows',
+  'grid-row-gap',
+  'grid-column-gap',
+] as const;
+
 export const DESIGN_SYSTEM_PROPERTIES = [
   'color',
   'background-color',
@@ -50,6 +77,8 @@ export const DESIGN_SYSTEM_PROPERTIES = [
   'opacity',
   'background-image',
 ] as const;
+
+const DESIGN_SAMPLE_PROPERTIES = [...DESIGN_SYSTEM_PROPERTIES, ...BLUEPRINT_LAYOUT_PROPERTIES] as const;
 
 const CATEGORY_FIELDS: Record<DesignSystemCategory, keyof DesignDetectedValues> = {
   color: 'palette',
@@ -152,6 +181,8 @@ export interface DesignElementMeta {
 }
 
 export interface DesignElementGeometry {
+  x?: number;
+  y?: number;
   width: number;
   height: number;
 }
@@ -168,10 +199,13 @@ export interface DesignSampleDeps {
 
 export interface SampledDesignElement {
   node: unknown;
+  parentNode: unknown;
   tag: string;
   roleHint: string | null;
   selector: string;
   textRendering: boolean;
+  depth: number;
+  geometry: DesignElementGeometry;
   style: Record<string, string>;
 }
 
@@ -198,6 +232,8 @@ export interface DesignSystemDeps {
   origin: () => string;
   limits?: Partial<DesignSystemLimits>;
 }
+
+export type DesignSystemSnapshotDeps = Omit<DesignSystemDeps, 'sample'>;
 
 type DetectedMaps = Record<DesignSystemCategory, Map<string, DesignDetectedValue>>;
 type SeenValues = Record<DesignSystemCategory, Set<string>>;
@@ -279,10 +315,11 @@ export function normalizeDesignValue(
 
 function readStyleValues(
   raw: Readonly<Record<string, string>>,
+  properties: readonly string[],
   limits: DesignSystemLimits,
 ): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const property of DESIGN_SYSTEM_PROPERTIES) {
+  for (const property of properties) {
     const value = sanitizeCssValue(raw[property] ?? null);
     if (value && value.length <= limits.maxValueLength) result[property] = value;
   }
@@ -297,16 +334,16 @@ export function sampleDesignSystemElements(
   const limits = resolveLimits(overrides);
   const elements: SampledDesignElement[] = [];
   const notes: string[] = [];
-  const queue: Array<{ node: unknown; depth: number }> = root === null || root === undefined
+  const queue: Array<{ node: unknown; parent: unknown; depth: number }> = root === null || root === undefined
     ? []
-    : [{ node: root, depth: 0 }];
+    : [{ node: root, parent: null, depth: 0 }];
   let skipped = 0;
   let elementLimitReported = false;
   let depthLimitReported = false;
   let childLimitReported = false;
 
   for (let index = 0; index < queue.length; index += 1) {
-    const { node, depth } = queue[index]!;
+    const { node, parent, depth } = queue[index]!;
     if (elements.length >= limits.maxElements) {
       if (!elementLimitReported) {
         notes.push(`Element limit reached (${limits.maxElements} elements).`);
@@ -343,7 +380,11 @@ export function sampleDesignSystemElements(
       continue;
     }
 
-    const style = readStyleValues(deps.computedStyle(node, DESIGN_SYSTEM_PROPERTIES), limits);
+    const style = readStyleValues(
+      deps.computedStyle(node, DESIGN_SAMPLE_PROPERTIES),
+      DESIGN_SAMPLE_PROPERTIES,
+      limits,
+    );
     if (style.display === 'none' || style.visibility === 'hidden' ||
       style.visibility === 'collapse' || style.opacity === '0') {
       skipped += 1;
@@ -352,10 +393,18 @@ export function sampleDesignSystemElements(
 
     elements.push({
       node,
+      parentNode: parent,
       tag,
       roleHint,
       selector,
       textRendering: meta.textRendering || TEXT_RENDERING_TAGS.has(tag),
+      depth,
+      geometry: {
+        x: Number.isFinite(geometry.x) ? geometry.x : 0,
+        y: Number.isFinite(geometry.y) ? geometry.y : 0,
+        width,
+        height,
+      },
       style,
     });
 
@@ -372,7 +421,7 @@ export function sampleDesignSystemElements(
       childLimitReported = true;
     }
     for (const child of children.slice(0, limits.maxChildrenPerNode)) {
-      queue.push({ node: child, depth: depth + 1 });
+      queue.push({ node: child, parent: node, depth: depth + 1 });
     }
   }
 
@@ -683,7 +732,7 @@ function safeOrigin(value: unknown): string {
 function collectedNotes(notes: string[], limits: DesignSystemLimits): string[] {
   const defaults = [
     'Inferred token names are PixelPeek suggestions, not authored names.',
-    'Only visible same-document elements were sampled; iframes and shadow roots are excluded in v1.',
+    'Only visible same-document elements were sampled. Iframes and shadow roots are excluded in v1.',
     'Computed values may not preserve authored custom-property aliases.',
   ];
   return Array.from(new Set([...notes, ...defaults])).slice(0, limits.maxNotes);
@@ -730,13 +779,12 @@ function enforcePayloadLimit(
   return next;
 }
 
-export function extractDesignSystemSnapshot(
+export function buildDesignSystemSnapshotFromSample(
   requestId: string,
-  root: unknown,
-  deps: DesignSystemDeps,
+  sampled: DesignSamplingResult,
+  deps: DesignSystemSnapshotDeps,
 ): DesignSystemSnapshot {
   const limits = resolveLimits(deps.limits);
-  const sampled = sampleDesignSystemElements(root, deps.sample, limits);
   const notes = [...sampled.notes];
   const detected = createDetectedMaps();
   const exemplars = new Map<string, DesignExemplar[]>();
@@ -800,4 +848,14 @@ export function extractDesignSystemSnapshot(
   };
 
   return enforcePayloadLimit(snapshot, limits, notes);
+}
+
+export function extractDesignSystemSnapshot(
+  requestId: string,
+  root: unknown,
+  deps: DesignSystemDeps,
+): DesignSystemSnapshot {
+  const limits = resolveLimits(deps.limits);
+  const sampled = sampleDesignSystemElements(root, deps.sample, limits);
+  return buildDesignSystemSnapshotFromSample(requestId, sampled, deps);
 }

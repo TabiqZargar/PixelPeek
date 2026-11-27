@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MessageType } from '../src/shared/messages';
+import { MessageType, isWebsiteBlueprint } from '../src/shared/messages';
 import { DESIGN_SYSTEM_LIMITS } from '../src/shared/types';
 
 type ContentListener = (
@@ -206,5 +206,131 @@ describe('Phase 4 content integration', () => {
 
     target.remove();
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  });
+});
+
+describe('Phase 5 website blueprint content integration', () => {
+  it('emits a validated blueprint event and acknowledges without a payload', async () => {
+    const stub = await loadContent();
+    document.body.innerHTML = `
+      <header><nav style="display:flex;gap:8px">Navigation</nav></header>
+      <main style="display:flex"><button class="primary" style="color:#8b6dff">Click me</button></main>
+      <input value="secret" placeholder="hint" />
+    `;
+    const input = document.querySelector('input');
+    if (!input) throw new Error('Missing input fixture.');
+    Object.defineProperty(input, 'value', {
+      get: () => {
+        throw new Error('input value was read');
+      },
+    });
+    Object.defineProperty(input, 'placeholder', {
+      get: () => {
+        throw new Error('input placeholder was read');
+      },
+    });
+    const textGetter = vi.spyOn(Node.prototype, 'textContent', 'get');
+
+    expect(dispatch(stub, {
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: 'bp-content',
+    })).toEqual({ ok: true });
+
+    const event = eventOfType(stub, MessageType.BlueprintChanged);
+    expect(event).toBeDefined();
+    const blueprint = event?.payload;
+    expect(isWebsiteBlueprint(blueprint)).toBe(true);
+    expect((blueprint as { metadata?: { requestId?: string } }).metadata?.requestId).toBe('bp-content');
+    expect(textGetter).not.toHaveBeenCalled();
+    for (const [message] of stub.runtime.sendMessage.mock.calls as unknown[][]) {
+      expect(JSON.stringify(message)).not.toContain('secret');
+      expect(JSON.stringify(message)).not.toContain('hint');
+      expect(JSON.stringify(message)).not.toContain('Click me');
+      expect(JSON.stringify(message)).not.toContain('Navigation');
+    }
+
+    expect(dispatch(stub, { type: MessageType.ExtractDesignSystem, requestId: 'ds-after-bp' })).toEqual({
+      ok: true,
+    });
+    expect((eventOfType(stub, MessageType.DesignSystemChanged)?.payload as { requestId?: string }).requestId)
+      .toBe('ds-after-bp');
+  });
+
+  it('rejects an invalid website blueprint request before extracting', async () => {
+    const stub = await loadContent();
+    expect(dispatch(stub, { type: MessageType.ExtractWebsiteBlueprint, requestId: '' })).toEqual({
+      ok: false,
+      error: 'Invalid website blueprint request.',
+      errorCode: 'invalid-request',
+    });
+    expect(stub.runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('reports website blueprint extraction errors through the runtime error contract', async () => {
+    const stub = await loadContent();
+    const getAttribute = vi.spyOn(Element.prototype, 'getAttribute').mockImplementation(() => {
+      throw new Error('sampling failed');
+    });
+
+    expect(dispatch(stub, {
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: 'bp-error',
+    })).toEqual({
+      ok: false,
+      error: 'sampling failed',
+      errorCode: 'website-blueprint-extraction-failed',
+    });
+    expect(eventOfType(stub, MessageType.RuntimeError)).toEqual({
+      type: MessageType.RuntimeError,
+      payload: {
+        source: 'website-blueprint',
+        requestId: 'bp-error',
+        message: 'sampling failed',
+        code: 'website-blueprint-extraction-failed',
+      },
+    });
+    expect(eventOfType(stub, MessageType.BlueprintChanged)).toBeUndefined();
+
+    getAttribute.mockRestore();
+    document.body.innerHTML = '<main style="display:flex"><button>Ready</button></main>';
+    expect(dispatch(stub, {
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: 'bp-recovered',
+    })).toEqual({ ok: true });
+    expect((eventOfType(stub, MessageType.BlueprintChanged)?.payload as {
+      metadata?: { requestId?: string };
+    }).metadata?.requestId).toBe('bp-recovered');
+  });
+
+  it('acknowledges overlapping capture requests without a second event', async () => {
+    const stub = await loadContent();
+    document.body.innerHTML = '<main style="display:flex"><button>Ready</button></main>';
+    const original = Date.prototype.toISOString;
+    let dispatched = false;
+    const clock = vi.spyOn(Date.prototype, 'toISOString').mockImplementation(function mockToISOString(this: Date) {
+      if (!dispatched) {
+        dispatched = true;
+        expect(dispatch(stub, {
+          type: MessageType.ExtractWebsiteBlueprint,
+          requestId: 'bp-overlap',
+        })).toEqual({
+          ok: false,
+          error: 'A website blueprint capture is already running.',
+          errorCode: 'capture-in-progress',
+        });
+      }
+      return original.call(this);
+    });
+
+    expect(dispatch(stub, {
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: 'bp-primary',
+    })).toEqual({ ok: true });
+    expect(eventsOfType(stub, MessageType.BlueprintChanged)).toHaveLength(1);
+    expect((eventOfType(stub, MessageType.BlueprintChanged)?.payload as {
+      metadata?: { requestId?: string };
+    }).metadata?.requestId).toBe('bp-primary');
+    expect(eventOfType(stub, MessageType.RuntimeError)).toBeUndefined();
+    clock.mockRestore();
   });
 });

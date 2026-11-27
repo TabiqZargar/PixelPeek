@@ -5,6 +5,7 @@ import {
   isDesignSystemSnapshot,
   isHierarchyDirection,
   isMotionReplayAction,
+  isWebsiteBlueprintRequest,
   type ContentEvent,
 } from '../shared/messages';
 import {
@@ -30,6 +31,10 @@ import {
   type TransitionEventRecord,
 } from './motion';
 import { createSnapshot, type SnapshotDeps } from './snapshot';
+import {
+  captureWebsiteBlueprint,
+  type WebsiteBlueprintCaptureDeps,
+} from './website-blueprint-capture';
 
 const HOST_ID = 'pixelpeek-overlay-host';
 const DESIGN_STYLESHEET_DEPTH = 6;
@@ -162,15 +167,23 @@ function designMeta(node: unknown): DesignElementMeta {
   };
 }
 
-function designGeometry(node: unknown): { width: number; height: number } {
+function designGeometry(node: unknown): { x: number; y: number; width: number; height: number } {
   try {
     const rect = (node as Element).getBoundingClientRect?.();
+    const x = typeof rect?.x === 'number' && Number.isFinite(rect.x)
+      ? rect.x
+      : typeof rect?.left === 'number' && Number.isFinite(rect.left) ? rect.left : 0;
+    const y = typeof rect?.y === 'number' && Number.isFinite(rect.y)
+      ? rect.y
+      : typeof rect?.top === 'number' && Number.isFinite(rect.top) ? rect.top : 0;
     return {
+      x,
+      y,
       width: typeof rect?.width === 'number' && Number.isFinite(rect.width) ? rect.width : 0,
       height: typeof rect?.height === 'number' && Number.isFinite(rect.height) ? rect.height : 0,
     };
   } catch {
-    return { width: 0, height: 0 };
+    return { x: 0, y: 0, width: 0, height: 0 };
   }
 }
 
@@ -279,6 +292,59 @@ function extractPageDesignSystem(requestId: string) {
   const root = document.body && document.body.isConnected ? document.body : null;
   return extractDesignSystemSnapshot(requestId, root, designSystemDeps);
 }
+
+const websiteBlueprintDeps: WebsiteBlueprintCaptureDeps = {
+  root: () => document.body && document.body.isConnected ? document.body : null,
+  sample: designSystemDeps.sample,
+  readStylesheets: readDesignStylesheets,
+  now: () => new Date().toISOString(),
+  origin: designSystemDeps.origin,
+  viewport: () => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio || 1,
+  }),
+  documentInfo: () => {
+    let colorScheme: 'dark' | 'light' = 'light';
+    try {
+      if (typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        colorScheme = 'dark';
+      }
+    } catch {
+      colorScheme = 'light';
+    }
+    return {
+      language: document.documentElement.lang || null,
+      colorScheme,
+      documentWidth: document.documentElement.clientWidth || 1,
+      documentHeight: document.documentElement.clientHeight || 1,
+      scrollWidth: document.documentElement.scrollWidth || 1,
+      scrollHeight: document.documentElement.scrollHeight || 1,
+    };
+  },
+  motion: () => null,
+};
+
+let websiteBlueprintCaptureInFlight = false;
+
+function cancelWebsiteBlueprintCapture(): void {
+  websiteBlueprintCaptureInFlight = false;
+}
+
+function extractPageWebsiteBlueprint(requestId: string) {
+  if (websiteBlueprintCaptureInFlight) {
+    throw new Error('A website blueprint capture is already running.');
+  }
+  websiteBlueprintCaptureInFlight = true;
+  try {
+    return captureWebsiteBlueprint(requestId, websiteBlueprintDeps);
+  } finally {
+    websiteBlueprintCaptureInFlight = false;
+  }
+}
+
+window.addEventListener('pagehide', cancelWebsiteBlueprintCapture, true);
 
 function emit(event: ContentEvent): void {
   if (!isContentEvent(event)) return;
@@ -844,6 +910,7 @@ function onKeyDown(event: KeyboardEvent): void {
 }
 
 function onPageHide(): void {
+  cancelWebsiteBlueprintCapture();
   stop({ clearSelection: true });
 }
 
@@ -873,6 +940,7 @@ function start(): void {
 
 function stop(options: { clearSelection?: boolean } = {}): void {
   cleanupReplay();
+  cancelWebsiteBlueprintCapture();
   if (!active) return;
   active = false;
   document.removeEventListener('mousemove', onMove, true);
@@ -934,6 +1002,46 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
           ok: false,
           error: messageText,
           errorCode: 'design-system-extraction-failed',
+        });
+      }
+      return false;
+    }
+    case MessageType.ExtractWebsiteBlueprint: {
+      if (!isWebsiteBlueprintRequest(message)) {
+        sendResponse({
+          ok: false,
+          error: 'Invalid website blueprint request.',
+          errorCode: 'invalid-request',
+        });
+        return false;
+      }
+      if (websiteBlueprintCaptureInFlight) {
+        sendResponse({
+          ok: false,
+          error: 'A website blueprint capture is already running.',
+          errorCode: 'capture-in-progress',
+        });
+        return false;
+      }
+      try {
+        const blueprint = extractPageWebsiteBlueprint(message.requestId);
+        emit({ type: MessageType.BlueprintChanged, payload: blueprint });
+        sendResponse({ ok: true });
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        emit({
+          type: MessageType.RuntimeError,
+          payload: {
+            source: 'website-blueprint',
+            requestId: message.requestId,
+            message: messageText,
+            code: 'website-blueprint-extraction-failed',
+          },
+        });
+        sendResponse({
+          ok: false,
+          error: messageText,
+          errorCode: 'website-blueprint-extraction-failed',
         });
       }
       return false;
