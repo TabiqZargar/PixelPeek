@@ -6,6 +6,7 @@ import type {
   MotionSnapshot,
   WebsiteBlueprint,
 } from '../src/shared/types';
+import type { WebsiteBlueprintInput } from '../src/content/website-blueprint';
 
 export function makeElementInfo(overrides: Partial<ElementInfo> = {}): ElementInfo {
   return {
@@ -428,6 +429,97 @@ export function makeWebsiteBlueprint(overrides: Partial<WebsiteBlueprint> = {}):
       },
     ],
     evidence: makeBlueprintEvidence(),
+    ...overrides,
+  };
+}
+
+export function makeWebsiteBlueprintInput(overrides: Partial<WebsiteBlueprintInput> = {}): WebsiteBlueprintInput {
+  const evidence = [{ source: 'sampling', status: 'detected', note: null }] as const;
+  const designSystem = makeDesignSystemSnapshot();
+  const motionSnapshot = makeMotionSnapshot();
+  return {
+    requestId: 'bp-input-1',
+    capturedAt: '2026-01-01T00:00:00.000Z',
+    origin: 'https://example.com',
+    viewport: { width: 1280, height: 720, devicePixelRatio: 1 },
+    document: {
+      language: 'en-US',
+      colorScheme: 'light',
+      documentWidth: 1280,
+      documentHeight: 1800,
+      scrollWidth: 1280,
+      scrollHeight: 1800,
+    },
+    structure: [
+      {
+        key: 'banner',
+        kind: 'region',
+        category: 'banner',
+        role: 'banner',
+        geometry: { x: 0, y: 0, width: 1200, height: 64 },
+        evidence: [{ source: 'geometry', status: 'detected', note: null }],
+      },
+      {
+        key: 'main',
+        parentKey: 'banner',
+        kind: 'section',
+        category: 'main',
+        role: 'main',
+        geometry: { x: 0, y: 64, width: 1200, height: 640 },
+        evidence: [{ source: 'sampling', status: 'inferred', note: 'Category was inferred from structure' }],
+      },
+    ],
+    components: [
+      {
+        category: 'button',
+        occurrenceCount: 2,
+        classificationStatus: 'detected',
+        sectionKeys: ['main'],
+        examples: [{
+          selectorHint: 'button.primary',
+          geometry: { x: 24, y: 96, width: 120, height: 40 },
+          evidence: [{ source: 'computed-style', status: 'detected', note: null }],
+        }],
+        evidence: [...evidence],
+      },
+    ],
+    layout: [{
+      targetKey: 'main',
+      display: 'flex',
+      width: '100%',
+      height: 'auto',
+      maxWidth: '1200px',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      rowGap: '8px',
+      columnGap: '8px',
+      position: 'relative',
+      flex: { direction: 'row', wrap: 'nowrap', alignItems: 'center', justifyContent: 'space-between' },
+      evidence: [{ source: 'computed-style', status: 'detected', note: null }],
+    }],
+    designSystem,
+    motion: {
+      snapshot: motionSnapshot,
+      targets: { a1: 'main', 'declared-1': 'main' },
+      labels: {
+        a1: { category: 'button', role: 'button', name: 'pulse' },
+        'declared-1': { category: 'button', role: 'button', name: 'transform' },
+      },
+    },
+    responsive: {
+      observedBreakpoints: ['current viewport'],
+      unobservedBreakpoints: ['smaller breakpoints were not observed'],
+      unobservedViewportStates: ['hover and focus states were not observed'],
+      evidence: [...evidence],
+    },
+    visualReferences: [{
+      targetKey: 'main',
+      descriptors: ['display flex', 'gap 8px'],
+      evidence: [{ source: 'geometry', status: 'detected', note: null }],
+    }],
+    evidence: [...evidence],
+    unavailable: [],
+    limitations: [],
     ...overrides,
   };
 }
