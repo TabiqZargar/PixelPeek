@@ -32,11 +32,14 @@ export function App() {
   } = useInspector();
   const design = useDesignSystem();
   const website = useWebsiteBlueprint();
+  const clearWebsiteExportState = website.clearExportState;
 
   const changeView = useCallback((next: View) => {
     if (view === 'inspector' && next !== 'inspector' && status === 'active') void stop();
+    if (view === 'website-blueprint' && next !== 'website-blueprint') clearWebsiteExportState();
+    if (view === 'export-studio' && next !== 'export-studio') clearWebsiteExportState();
     setView(next);
-  }, [status, stop, view]);
+  }, [clearWebsiteExportState, status, stop, view]);
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-ink-950">

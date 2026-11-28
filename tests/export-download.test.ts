@@ -56,4 +56,19 @@ describe('downloadText', () => {
     expect(document.querySelector('a')).toBeNull();
     expect(revokeObjectURL).not.toHaveBeenCalled();
   });
+
+  it('revokes the object URL and removes the anchor when the click throws', () => {
+    clickSpy.mockImplementationOnce(function (this: HTMLAnchorElement) {
+      clickedAnchor = this;
+      throw new Error('click blocked');
+    });
+
+    expect(downloadText('blueprint.json', 'application/json', '{}')).toBe(false);
+    expect(clickedAnchor?.parentElement).toBeNull();
+    expect(document.querySelector('a')).toBeNull();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    vi.runAllTimers();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:test');
+  });
 });

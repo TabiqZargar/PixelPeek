@@ -38,6 +38,21 @@ vi.mock('../src/panel/clipboard', () => ({ writeClipboard: mockState.clipboard }
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const originalCreateObjectURL = URL.createObjectURL;
+const originalRevokeObjectURL = URL.revokeObjectURL;
+let capturedBlob: Blob | null = null;
+let clickedAnchor: HTMLAnchorElement | null = null;
+let clickSpy: ReturnType<typeof vi.spyOn>;
+
+async function readBlob(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read blob.'));
+    reader.readAsText(blob);
+  });
+}
+
 let container: HTMLDivElement;
 let root: Root;
 let api: ReturnType<typeof useWebsiteBlueprint> | null = null;
@@ -51,6 +66,9 @@ function Harness() {
       </button>
       <button type="button" onClick={() => void api!.copyJson()}>
         Copy
+      </button>
+      <button type="button" onClick={() => void api!.downloadJson()}>
+        Download
       </button>
     </>
   );
@@ -106,11 +124,32 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+async function captureReady(includeUnknownField = false): Promise<string> {
+  await clickButton('Generate');
+  const requestId = mockState.extract.mock.calls[0]?.[0] as string;
+  const event = blueprintEvent(requestId) as Extract<ContentEvent, { type: typeof MessageType.BlueprintChanged }>;
+  const payload = includeUnknownField
+    ? ({ ...event.payload, privateNote: 'secret-note' } as typeof event.payload)
+    : event.payload;
+  await emit({ ...event, payload });
+  return requestId;
+}
+
 beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   api = null;
+  capturedBlob = null;
+  clickedAnchor = null;
+  URL.createObjectURL = vi.fn((blob: Blob) => {
+    capturedBlob = blob;
+    return 'blob:blueprint';
+  }) as typeof URL.createObjectURL;
+  URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
+  clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    clickedAnchor = this;
+  });
   mockState.extract.mockReset();
   mockState.getActiveTabInfo.mockReset();
   mockState.clipboard.mockReset();
@@ -129,6 +168,10 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  clickSpy.mockRestore();
+  vi.restoreAllMocks();
+  URL.createObjectURL = originalCreateObjectURL;
+  URL.revokeObjectURL = originalRevokeObjectURL;
 });
 
 describe('useWebsiteBlueprint', () => {
@@ -438,5 +481,79 @@ describe('useWebsiteBlueprint', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('downloads allowlisted JSON with an origin-safe filename and cleans up', async () => {
+    vi.useFakeTimers();
+    try {
+      const requestId = await captureReady(true);
+      await clickButton('Download');
+
+      expect(clickedAnchor?.download).toBe('pixelpeek-blueprint-https-example.com.json');
+      expect(clickedAnchor?.getAttribute('href')).toBe('blob:blueprint');
+      expect(clickedAnchor?.parentElement).toBeNull();
+      expect(document.querySelector('a')).toBeNull();
+      expect(current().exportFeedback).toEqual({ kind: 'success', message: 'Blueprint JSON downloaded.' });
+
+      await act(async () => {
+        vi.runAllTimers();
+        await Promise.resolve();
+      });
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:blueprint');
+
+      vi.useRealTimers();
+      if (!capturedBlob) throw new Error('Download blob was not created.');
+      expect(capturedBlob.type).toBe('application/json');
+      const json = await readBlob(capturedBlob);
+      expect(JSON.parse(json).metadata.requestId).toBe(requestId);
+      expect(json).not.toContain('privateNote');
+      expect(json).not.toContain('secret-note');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('revokes the object URL and allows retry when the download click fails', async () => {
+    vi.useFakeTimers();
+    try {
+      await captureReady();
+      clickSpy.mockImplementationOnce(() => {
+        throw new Error('download blocked');
+      });
+
+      await clickButton('Download');
+      expect(current().exportFeedback).toEqual({ kind: 'error', message: 'Download could not be started.' });
+      expect(document.querySelector('a')).toBeNull();
+
+      await act(async () => {
+        vi.runAllTimers();
+        await Promise.resolve();
+      });
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:blueprint');
+
+      await clickButton('Download');
+      expect(current().exportFeedback).toEqual({ kind: 'success', message: 'Blueprint JSON downloaded.' });
+      expect(capturedBlob).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not apply copy feedback after export state is cleared', async () => {
+    await captureReady();
+    const pending = deferred<boolean>();
+    mockState.clipboard.mockReturnValueOnce(pending.promise);
+    await clickButton('Copy');
+
+    await act(async () => {
+      current().clearExportState();
+    });
+    pending.resolve(true);
+    await act(async () => {
+      for (let index = 0; index < 8; index += 1) await Promise.resolve();
+    });
+
+    expect(current().copiedKey).toBeNull();
+    expect(current().exportFeedback).toBeNull();
   });
 });

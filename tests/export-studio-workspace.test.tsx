@@ -80,6 +80,20 @@ function preview(): string {
   return container.querySelector('textarea')?.value ?? '';
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function settle() {
+  await act(async () => {
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+  });
+}
+
 describe('ExportStudioWorkspace', () => {
   it('exposes all six formats and switches the preview to the selected output', () => {
     render();
@@ -209,5 +223,123 @@ describe('ExportStudioWorkspace', () => {
     expect(preview().length).toBeGreaterThan(0);
     expect(container.querySelector('textarea')?.className).toContain('min-w-0');
     expect(container.querySelector('textarea')?.className).toContain('break-anywhere');
+  });
+
+  it('does not apply copy feedback when the format changes while copying', async () => {
+    const pending = deferred<boolean>();
+    vi.mocked(writeClipboard).mockReturnValueOnce(pending.promise);
+    render();
+    await act(async () => clickButton('Copy Blueprint JSON'));
+    clickFormat('Component Inventory');
+
+    await act(async () => {
+      pending.resolve(true);
+      await pending.promise;
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).not.toContain('Blueprint JSON copied.');
+    expect(container.textContent).not.toContain('Component Inventory copied.');
+  });
+
+  it('does not apply copy feedback when the blueprint changes while copying', async () => {
+    const pending = deferred<boolean>();
+    vi.mocked(writeClipboard).mockReturnValueOnce(pending.promise);
+    render();
+    await act(async () => clickButton('Copy Blueprint JSON'));
+    const next = makeWebsiteBlueprint({
+      metadata: { ...blueprint.metadata, requestId: 'bp-2' },
+    });
+    render(320, { blueprint: next });
+
+    await act(async () => {
+      pending.resolve(true);
+      await pending.promise;
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).not.toContain('Blueprint JSON copied.');
+    expect(preview()).toContain('"requestId": "bp-2"');
+  });
+
+  it('keeps newer feedback when an older copy resolves afterwards', async () => {
+    const older = deferred<boolean>();
+    const newer = deferred<boolean>();
+    vi.mocked(writeClipboard).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    render();
+    await act(async () => clickButton('Copy Blueprint JSON'));
+    clickFormat('Implementation Brief');
+    await act(async () => clickButton('Copy Implementation Brief'));
+
+    await act(async () => {
+      newer.resolve(true);
+      await newer.promise;
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('Implementation Brief copied.');
+
+    await act(async () => {
+      older.resolve(false);
+      await older.promise;
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('Implementation Brief copied.');
+    expect(container.textContent).not.toContain('Clipboard access was denied.');
+  });
+
+  it('hides the previous preview and export actions during recapture', async () => {
+    render();
+    expect(preview()).toContain('"requestId": "bp-1"');
+
+    render(320, { status: 'loading' });
+    await settle();
+    expect(container.textContent).toContain('Capturing website blueprint');
+    expect(container.querySelector('textarea')).toBeNull();
+    expect(container.querySelector('[aria-label="Copy Blueprint JSON"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Download Blueprint JSON"]')).toBeNull();
+    expect(writeClipboard).not.toHaveBeenCalled();
+    expect(downloadText).not.toHaveBeenCalled();
+  });
+
+  it('uses the new blueprint after a successful recapture', async () => {
+    render();
+    const next = makeWebsiteBlueprint({
+      metadata: { ...blueprint.metadata, requestId: 'bp-2' },
+    });
+    render(320, { status: 'ready', blueprint: next });
+    await settle();
+
+    expect(preview()).toContain('"requestId": "bp-2"');
+    expect(preview()).not.toContain('"requestId": "bp-1"');
+    await act(async () => clickButton('Copy Blueprint JSON'));
+    expect(writeClipboard).toHaveBeenCalledWith(expect.stringContaining('"requestId": "bp-2"'));
+  });
+
+  it('keeps stale data unexportable after a failed recapture and restores on later success', async () => {
+    render();
+    render(320, {
+      status: 'error',
+      blueprint: null,
+      error: 'Capture failed.',
+      errorCode: 'content-unreachable',
+    });
+    await settle();
+    expect(container.textContent).toContain('Blueprint capture failed');
+    expect(container.querySelector('textarea')).toBeNull();
+    expect(container.querySelector('[aria-label="Copy Blueprint JSON"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Download Blueprint JSON"]')).toBeNull();
+
+    const next = makeWebsiteBlueprint({
+      metadata: { ...blueprint.metadata, requestId: 'bp-3' },
+    });
+    render(320, { status: 'ready', blueprint: next, error: null, errorCode: null });
+    await settle();
+    expect(preview()).toContain('"requestId": "bp-3"');
+    await act(async () => clickButton('Download Blueprint JSON'));
+    expect(downloadText).toHaveBeenCalledWith(
+      'blueprint.json',
+      'application/json',
+      expect.stringContaining('"requestId": "bp-3"'),
+    );
   });
 });

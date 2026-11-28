@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { serializeBlueprintAgentPrompt } from '../exports/agent-prompt';
 import { serializeDesignTokensCss } from '../exports/design-tokens';
 import {
@@ -233,9 +233,10 @@ export function ExportStudioWorkspace({
   const padding = metrics.contentPadding;
   const labelWidth = compact ? 92 : 112;
 
+  const captureReady = status === 'ready';
   const validBlueprint = useMemo(
-    () => (blueprint && isWebsiteBlueprint(blueprint) ? blueprint : null),
-    [blueprint],
+    () => (captureReady && blueprint && isWebsiteBlueprint(blueprint) ? blueprint : null),
+    [blueprint, captureReady],
   );
 
   const exportState = useMemo<{ result: ExportResult | null; error: string | null }>(() => {
@@ -247,13 +248,21 @@ export function ExportStudioWorkspace({
     }
   }, [selectedId, validBlueprint]);
 
+  const format = EXPORT_FORMATS[selectedId];
+  const result = exportState.result;
+  const sourceRef = useRef({ selectedId, blueprint: validBlueprint, result });
+  sourceRef.current = { selectedId, blueprint: validBlueprint, result };
+  const copyGenerationRef = useRef(0);
+
   useEffect(() => {
+    copyGenerationRef.current += 1;
     setCopiedId(null);
     setFeedback(null);
   }, [selectedId, validBlueprint]);
 
-  const format = EXPORT_FORMATS[selectedId];
-  const result = exportState.result;
+  useEffect(() => () => {
+    copyGenerationRef.current += 1;
+  }, []);
 
   const copy = async () => {
     const current = result;
@@ -261,12 +270,29 @@ export function ExportStudioWorkspace({
       setFeedback({ kind: 'error', message: 'There is no validated export to copy.' });
       return;
     }
+    const generation = ++copyGenerationRef.current;
+    const source = { selectedId, blueprint: validBlueprint, result: current };
     const ok = await writeClipboard(current.content);
+    const latest = sourceRef.current;
+    if (
+      generation !== copyGenerationRef.current ||
+      latest.selectedId !== source.selectedId ||
+      latest.blueprint !== source.blueprint ||
+      latest.result !== source.result
+    ) {
+      return;
+    }
     setCopiedId(ok ? current.id : null);
     setFeedback({
       kind: ok ? 'success' : 'error',
       message: ok ? `${format.title} copied.` : 'Clipboard access was denied.',
     });
+    if (ok) {
+      window.setTimeout(() => {
+        if (generation !== copyGenerationRef.current || sourceRef.current.result !== current) return;
+        setCopiedId((id) => (id === current.id ? null : id));
+      }, 1600);
+    }
   };
 
   const download = () => {

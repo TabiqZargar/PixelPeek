@@ -10,6 +10,7 @@ import {
 } from '../../shared/transport';
 import type { WebsiteBlueprint } from '../../shared/types';
 import { writeClipboard } from '../clipboard';
+import { downloadText } from '../download';
 import { stringifyBlueprint } from '../exports/serialize';
 
 export type WebsiteBlueprintStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -61,10 +62,17 @@ export function useWebsiteBlueprint() {
   const pendingRef = useRef<string | null>(null);
   const ownerRef = useRef<BlueprintOwner | null>(null);
   const timeoutRef = useRef<number | null>(null);
+  const exportGenerationRef = useRef(0);
 
   const updateBlueprint = useCallback((next: WebsiteBlueprint | null) => {
     blueprintRef.current = next;
     setBlueprint(next);
+  }, []);
+
+  const clearExportState = useCallback(() => {
+    exportGenerationRef.current += 1;
+    setCopiedKey(null);
+    setExportFeedback(null);
   }, []);
 
   const clearPending = useCallback((requestId: string) => {
@@ -82,6 +90,7 @@ export function useWebsiteBlueprint() {
     setStatus('error');
     setError(message);
     setErrorCode(code);
+    exportGenerationRef.current += 1;
     setCopiedKey(null);
     setExportFeedback(null);
   }, [clearPending, updateBlueprint]);
@@ -101,6 +110,7 @@ export function useWebsiteBlueprint() {
     setStatus(message ? 'error' : 'idle');
     setError(message);
     setErrorCode(message ? 'stale-page' : null);
+    exportGenerationRef.current += 1;
     setCopiedKey(null);
     setExportFeedback(null);
   }, [updateBlueprint]);
@@ -140,6 +150,7 @@ export function useWebsiteBlueprint() {
           setStatus('ready');
           setError(null);
           setErrorCode(null);
+          exportGenerationRef.current += 1;
           setCopiedKey(null);
           setExportFeedback(null);
         });
@@ -192,6 +203,7 @@ export function useWebsiteBlueprint() {
     setStatus('loading');
     setError(null);
     setErrorCode(null);
+    exportGenerationRef.current += 1;
     setCopiedKey(null);
     setExportFeedback(null);
 
@@ -233,14 +245,19 @@ export function useWebsiteBlueprint() {
       setExportFeedback({ kind: 'error', message: 'There is no validated blueprint to copy.' });
       return false;
     }
+    const generation = exportGenerationRef.current;
     const ok = await writeClipboard(stringifyBlueprint(current));
+    if (generation !== exportGenerationRef.current || blueprintRef.current !== current) return false;
     setCopiedKey(ok ? 'blueprint-json' : null);
     setExportFeedback({
       kind: ok ? 'success' : 'error',
       message: ok ? 'Blueprint JSON copied.' : 'Clipboard access was denied.',
     });
     if (ok) {
-      window.setTimeout(() => setCopiedKey((key) => (key === 'blueprint-json' ? null : key)), 1600);
+      window.setTimeout(() => {
+        if (generation !== exportGenerationRef.current) return;
+        setCopiedKey((key) => (key === 'blueprint-json' ? null : key));
+      }, 1600);
     }
     return ok;
   }, []);
@@ -251,20 +268,22 @@ export function useWebsiteBlueprint() {
       setExportFeedback({ kind: 'error', message: 'There is no validated blueprint to download.' });
       return false;
     }
+    const generation = exportGenerationRef.current;
+    const stale = () => generation !== exportGenerationRef.current || blueprintRef.current !== current;
     try {
-      const json = stringifyBlueprint(current);
-      const blob = new Blob([json], { type: 'application/json' });
-      const objectUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = objectUrl;
-      anchor.download = `pixelpeek-blueprint-${fileSafe(ownerRef.current?.tab.origin ?? current.metadata.origin)}.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-      setExportFeedback({ kind: 'success', message: 'Blueprint JSON downloaded.' });
-      return true;
+      const ok = downloadText(
+        `pixelpeek-blueprint-${fileSafe(ownerRef.current?.tab.origin ?? current.metadata.origin)}.json`,
+        'application/json',
+        stringifyBlueprint(current),
+      );
+      if (stale()) return false;
+      setExportFeedback({
+        kind: ok ? 'success' : 'error',
+        message: ok ? 'Blueprint JSON downloaded.' : 'Download could not be started.',
+      });
+      return ok;
     } catch {
+      if (stale()) return false;
       setExportFeedback({ kind: 'error', message: 'Download could not be started.' });
       return false;
     }
@@ -280,5 +299,6 @@ export function useWebsiteBlueprint() {
     extract,
     copyJson,
     downloadJson,
+    clearExportState,
   };
 }
