@@ -20,6 +20,11 @@ export interface ExportFeedback {
 
 const TIMEOUT_MS = 12000;
 
+interface BlueprintOwner {
+  requestId: string;
+  tab: ActiveTabInfo;
+}
+
 function makeRequestId(): string {
   const random = globalThis.crypto?.randomUUID?.();
   return random ? `bp-${random}` : `bp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -53,7 +58,7 @@ export function useWebsiteBlueprint() {
   const [exportFeedback, setExportFeedback] = useState<ExportFeedback | null>(null);
   const blueprintRef = useRef<WebsiteBlueprint | null>(null);
   const pendingRef = useRef<string | null>(null);
-  const ownerRef = useRef<ActiveTabInfo | null>(null);
+  const ownerRef = useRef<BlueprintOwner | null>(null);
   const timeoutRef = useRef<number | null>(null);
 
   const updateBlueprint = useCallback((next: WebsiteBlueprint | null) => {
@@ -71,7 +76,7 @@ export function useWebsiteBlueprint() {
   const fail = useCallback((requestId: string, message: string, code: string | null) => {
     if (pendingRef.current !== requestId) return;
     clearPending(requestId);
-    ownerRef.current = null;
+    if (ownerRef.current?.requestId === requestId) ownerRef.current = null;
     updateBlueprint(null);
     setStatus('error');
     setError(message);
@@ -80,11 +85,17 @@ export function useWebsiteBlueprint() {
     setExportFeedback(null);
   }, [clearPending, updateBlueprint]);
 
-  const invalidate = useCallback((message: string | null) => {
-    if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-    timeoutRef.current = null;
-    pendingRef.current = null;
-    ownerRef.current = null;
+  const invalidate = useCallback((requestId: string, message: string | null) => {
+    const ownsPending = pendingRef.current === requestId;
+    const ownsReady = ownerRef.current?.requestId === requestId;
+    if (!ownsPending && !ownsReady) return;
+    if (pendingRef.current !== null && !ownsPending) return;
+    if (ownsPending) {
+      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+      pendingRef.current = null;
+    }
+    if (ownsReady) ownerRef.current = null;
     updateBlueprint(null);
     setStatus(message ? 'error' : 'idle');
     setError(message);
@@ -99,29 +110,30 @@ export function useWebsiteBlueprint() {
     const handleEvent = (event: ContentEvent) => {
       const requestId = pendingRef.current;
       if (!requestId) return;
+      const owner = ownerRef.current;
+      if (!owner || owner.requestId !== requestId) return;
 
       const verifyOwner = async (): Promise<boolean> => {
-        const owner = ownerRef.current;
-        if (!owner) return false;
         try {
           const current = await getActiveTabInfo();
           if (!mounted) return false;
-          if (!sameOwner(owner, current)) {
-            invalidate('The active page changed, so the blueprint was cleared.');
+          if (!sameOwner(owner.tab, current)) {
+            invalidate(requestId, 'The active page changed, so the blueprint was cleared.');
             return false;
           }
           return true;
         } catch {
-          if (mounted) invalidate('Could not verify the active page. Retry capture.');
+          if (mounted) invalidate(requestId, 'Could not verify the active page. Retry capture.');
           return false;
         }
       };
 
       if (event.type === MessageType.BlueprintChanged) {
         if (event.payload.metadata.requestId !== requestId) return;
+        if (event.payload.metadata.origin !== owner.tab.origin) return;
         if (!isWebsiteBlueprint(event.payload)) return;
         void verifyOwner().then((owned) => {
-          if (!owned || pendingRef.current !== requestId || !mounted) return;
+          if (!owned || pendingRef.current !== requestId || ownerRef.current?.requestId !== requestId || !mounted) return;
           clearPending(requestId);
           updateBlueprint(event.payload);
           setStatus('ready');
@@ -136,7 +148,7 @@ export function useWebsiteBlueprint() {
       if (event.type === MessageType.RuntimeError && event.payload.source === 'website-blueprint') {
         if (event.payload.requestId !== requestId) return;
         void verifyOwner().then((owned) => {
-          if (!owned || pendingRef.current !== requestId || !mounted) return;
+          if (!owned || pendingRef.current !== requestId || ownerRef.current?.requestId !== requestId || !mounted) return;
           fail(requestId, event.payload.message, event.payload.code ?? 'website-blueprint-extraction-failed');
         });
       }
@@ -144,11 +156,15 @@ export function useWebsiteBlueprint() {
 
     const disposeEvents = onPanelEvent(handleEvent);
     const disposeTabs = onActiveTabChanged(() => {
-      if (!mounted || !ownerRef.current) return;
+      const requestId = pendingRef.current ?? ownerRef.current?.requestId;
+      if (!mounted || !requestId) return;
       void getActiveTabInfo()
         .then((current) => {
-          if (!mounted || sameOwner(ownerRef.current, current)) return;
-          invalidate('The active page changed, so the blueprint was cleared.');
+          const owner = ownerRef.current;
+          if (!mounted) return;
+          if (owner && owner.requestId !== requestId) return;
+          if (owner && sameOwner(owner.tab, current)) return;
+          invalidate(requestId, 'The active page changed, so the blueprint was cleared.');
         })
         .catch(() => undefined);
     });
@@ -159,12 +175,14 @@ export function useWebsiteBlueprint() {
       disposeTabs();
       if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
+      pendingRef.current = null;
+      ownerRef.current = null;
     };
   }, [clearPending, fail, invalidate, updateBlueprint]);
 
   const extract = useCallback(async () => {
+    if (pendingRef.current !== null) return false;
     const requestId = makeRequestId();
-    if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
     pendingRef.current = requestId;
     ownerRef.current = null;
     timeoutRef.current = window.setTimeout(() => {
@@ -181,19 +199,30 @@ export function useWebsiteBlueprint() {
       if (target.tabId === null) {
         throw new ExtensionRequestError('There is no active tab to inspect.', 'no-active-tab');
       }
-      await extractWebsiteBlueprint(requestId);
+      if (pendingRef.current !== requestId) return false;
+      ownerRef.current = { requestId, tab: target };
+      const result = await extractWebsiteBlueprint(requestId);
+      if (!result.ok) {
+        throw new ExtensionRequestError(
+          result.error ?? 'The website blueprint request could not be started.',
+          result.errorCode,
+        );
+      }
+      if (pendingRef.current !== requestId) return false;
       const confirmed = await getActiveTabInfo();
       if (!sameOwner(target, confirmed)) {
         throw new ExtensionRequestError('The active page changed before capture started. Retry on the same page.', 'stale-page');
       }
-      if (pendingRef.current !== requestId) return;
-      ownerRef.current = confirmed;
+      if (pendingRef.current !== requestId) return false;
+      ownerRef.current = { requestId, tab: confirmed };
+      return true;
     } catch (cause) {
       fail(
         requestId,
         describe(cause),
         cause instanceof ExtensionRequestError ? cause.code : 'website-blueprint-extraction-failed',
       );
+      return false;
     }
   }, [fail]);
 
@@ -227,7 +256,7 @@ export function useWebsiteBlueprint() {
       const objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = objectUrl;
-      anchor.download = `pixelpeek-blueprint-${fileSafe(ownerRef.current?.origin ?? current.metadata.origin)}.json`;
+      anchor.download = `pixelpeek-blueprint-${fileSafe(ownerRef.current?.tab.origin ?? current.metadata.origin)}.json`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
