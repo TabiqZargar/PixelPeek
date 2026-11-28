@@ -130,6 +130,10 @@ describe('panel UI at narrow widths', () => {
       (button) => button.textContent === 'Website Blueprint',
     );
     expect(blueprintNav?.disabled).toBe(false);
+    const exportNav = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Export Studio',
+    );
+    expect(exportNav?.disabled).toBe(false);
     expect(container.querySelectorAll('[style*="width"]').length).toBeGreaterThan(0);
     expect(container.querySelector('main')?.className).toContain('min-w-0');
   });

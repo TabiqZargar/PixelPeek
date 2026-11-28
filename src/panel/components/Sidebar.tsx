@@ -1,7 +1,7 @@
 import { Icon, type IconName } from './Icon';
 import type { PanelMetrics } from '../hooks/usePanelWidth';
 
-export type View = 'inspector' | 'design-system' | 'motion' | 'website-blueprint' | 'agent-prompts' | 'settings';
+export type View = 'inspector' | 'design-system' | 'motion' | 'website-blueprint' | 'export-studio' | 'agent-prompts' | 'settings';
 
 interface Props {
   view: View;
@@ -22,6 +22,7 @@ const workspace: NavItem[] = [
   { label: 'Design System', icon: 'layers', view: 'design-system' },
   { label: 'Motion', icon: 'motion', view: 'motion' },
   { label: 'Website Blueprint', icon: 'layout', view: 'website-blueprint' },
+  { label: 'Export Studio', icon: 'copy', view: 'export-studio' },
   { label: 'Saved Blueprints', icon: 'bookmark', disabled: true },
 ];
 

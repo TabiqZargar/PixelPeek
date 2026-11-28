@@ -3,6 +3,7 @@ import { usePanelMetrics } from './hooks/usePanelMetrics';
 import { useInspector } from './hooks/useInspector';
 import { AgentPromptsView } from './components/AgentPromptsView';
 import { DesignSystemWorkspace } from './components/DesignSystemWorkspace';
+import { ExportStudioWorkspace } from './components/ExportStudioWorkspace';
 import { Inspector } from './components/Inspector';
 import { MotionWorkspace } from './components/MotionWorkspace';
 import { SettingsView } from './components/SettingsView';
@@ -96,6 +97,16 @@ export function App() {
           onExtract={() => void website.extract()}
           onCopyJson={() => void website.copyJson()}
           onDownloadJson={() => void website.downloadJson()}
+        />
+      )}
+      {view === 'export-studio' && (
+        <ExportStudioWorkspace
+          blueprint={website.blueprint}
+          status={website.status}
+          error={website.error}
+          errorCode={website.errorCode}
+          metrics={metrics}
+          onOpenWebsiteBlueprint={() => setView('website-blueprint')}
         />
       )}
       {view === 'agent-prompts' && (
