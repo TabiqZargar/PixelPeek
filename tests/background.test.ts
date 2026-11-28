@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MessageType } from '../src/shared/messages';
-import { makeDesignSystemSnapshot } from './fixtures';
+import { makeDesignSystemSnapshot, makeWebsiteBlueprint } from './fixtures';
 
 type Listener = (
   message: unknown,
@@ -119,6 +119,23 @@ async function startExtraction(
 ): Promise<unknown> {
   stub.tabs.query.mockResolvedValue([tab]);
   return dispatch(stub, { type: MessageType.ExtractDesignSystem, requestId }, {});
+}
+
+async function startBlueprintExtraction(
+  stub: BackgroundStub,
+  requestId: string,
+  tab: { id: number; url: string } = { id: 42, url: 'https://example.com/page' },
+): Promise<unknown> {
+  stub.tabs.query.mockResolvedValue([tab]);
+  return dispatch(stub, { type: MessageType.ExtractWebsiteBlueprint, requestId }, {});
+}
+
+function blueprintFor(requestId: string, origin = 'https://example.com') {
+  const base = makeWebsiteBlueprint();
+  return makeWebsiteBlueprint({
+    metadata: { ...base.metadata, requestId, origin },
+    designSystem: makeDesignSystemSnapshot({ ...base.designSystem, origin }),
+  });
 }
 
 function sentEvents(stub: BackgroundStub, type: string) {
@@ -521,5 +538,370 @@ describe('Phase 4 background routing', () => {
       animationId: 'a1',
     });
     expect(stub.store.get('inspection')).toEqual({ tabId: 7, active: true, lastTabId: 7 });
+  });
+});
+
+describe('Phase 5 website blueprint background routing', () => {
+  it('routes a validated request, stores only metadata, and accepts one matching result', async () => {
+    const base = createStub();
+    const state = { tabId: 7, active: true, lastTabId: 7 };
+    base.store.set('inspection', state);
+    const stub = await loadBackground(base);
+    useLiveContent(stub);
+
+    expect(await startBlueprintExtraction(stub, 'bp-ok')).toEqual({ ok: true });
+    expect(sentToTab(stub, MessageType.ExtractWebsiteBlueprint)?.[1]).toEqual({
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: 'bp-ok',
+    });
+    expect(stub.scripting.executeScript).not.toHaveBeenCalled();
+    expect(stub.store.get('inspection')).toEqual(state);
+    expect(stub.store.get('website-blueprint-request')).toEqual({
+      tabId: 42,
+      requestId: 'bp-ok',
+      url: 'https://example.com/page',
+    });
+    expect(JSON.stringify(sentToTab(stub, MessageType.ExtractWebsiteBlueprint)?.[1] ?? '')).not.toContain(
+      'payload',
+    );
+
+    const blueprint = blueprintFor('bp-ok');
+    const sender = { tab: { id: 42, url: 'https://example.com/page' } };
+    expect(await dispatch(stub, {
+      type: MessageType.BlueprintChanged,
+      payload: blueprint,
+    }, sender)).toEqual({ ok: true });
+    expect(sentEvents(stub, MessageType.BlueprintChanged)).toEqual([
+      { type: MessageType.BlueprintChanged, payload: blueprint },
+    ]);
+    expect(stub.store.has('website-blueprint-request')).toBe(false);
+
+    await dispatch(stub, { type: MessageType.BlueprintChanged, payload: blueprint }, sender);
+    expect(sentEvents(stub, MessageType.BlueprintChanged)).toHaveLength(1);
+  });
+
+  it('rejects invalid requests and unsupported tabs without injecting', async () => {
+    const stub = await loadBackground(createStub());
+    useLiveContent(stub);
+
+    expect(await dispatch(stub, {
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: '',
+    }, {})).toEqual({
+      ok: false,
+      error: 'Invalid website blueprint request.',
+      errorCode: 'invalid-request',
+    });
+
+    stub.tabs.query.mockResolvedValue([]);
+    expect(await dispatch(stub, {
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: 'bp-no-tab',
+    }, {})).toEqual({
+      ok: false,
+      error: 'There is no active tab to inspect.',
+      errorCode: 'no-active-tab',
+    });
+
+    stub.tabs.query.mockResolvedValue([{ id: 42, url: 'chrome://extensions' }]);
+    expect(await dispatch(stub, {
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: 'bp-unsupported',
+    }, {})).toEqual({
+      ok: false,
+      error: 'This page cannot be inspected. Try a regular http(s) website.',
+      errorCode: 'unsupported-url',
+    });
+    expect(stub.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(stub.scripting.executeScript).not.toHaveBeenCalled();
+    expect(stub.store.has('website-blueprint-request')).toBe(false);
+  });
+
+  it('injects only when no live content script responds', async () => {
+    const stub = await loadBackground(createStub());
+    let pings = 0;
+    stub.tabs.sendMessage.mockImplementation(async (_tabId: number, message: { type: string }) => {
+      if (message.type === MessageType.Ping) {
+        pings += 1;
+        return pings === 2 ? { type: MessageType.Pong } : undefined;
+      }
+      return { ok: true };
+    });
+
+    expect(await startBlueprintExtraction(stub, 'bp-inject')).toEqual({ ok: true });
+    expect(stub.scripting.executeScript).toHaveBeenCalledWith({
+      target: { tabId: 42 },
+      files: ['content.js'],
+    });
+    expect(sentToTab(stub, MessageType.ExtractWebsiteBlueprint)?.[1]).toEqual({
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: 'bp-inject',
+    });
+  });
+
+  it('clears pending state when injection, forwarding, or acknowledgement fails', async () => {
+    const injection = await loadBackground(createStub());
+    useLiveContent(injection, 0);
+    injection.scripting.executeScript.mockRejectedValue(new Error('cannot inject'));
+    expect(await startBlueprintExtraction(injection, 'bp-injection-fail')).toMatchObject({
+      ok: false,
+      errorCode: 'website-blueprint-extraction-failed',
+    });
+    expect(injection.store.has('website-blueprint-request')).toBe(false);
+
+    const forwarding = await loadBackground(createStub());
+    forwarding.tabs.sendMessage.mockImplementation(async (_tabId: number, message: { type: string }) => {
+      if (message.type === MessageType.Ping) return { type: MessageType.Pong };
+      if (message.type === MessageType.ExtractWebsiteBlueprint) throw new Error('forward failed');
+      return { ok: true };
+    });
+    expect(await startBlueprintExtraction(forwarding, 'bp-forward-fail')).toMatchObject({
+      ok: false,
+      errorCode: 'website-blueprint-extraction-failed',
+    });
+    expect(forwarding.store.has('website-blueprint-request')).toBe(false);
+
+    const ack = await loadBackground(createStub());
+    ack.tabs.sendMessage.mockImplementation(async (_tabId: number, message: { type: string }) => {
+      if (message.type === MessageType.Ping) return { type: MessageType.Pong };
+      if (message.type === MessageType.ExtractWebsiteBlueprint) return { ok: false, errorCode: 'capture-in-progress' };
+      return { ok: true };
+    });
+    expect(await startBlueprintExtraction(ack, 'bp-ack-fail')).toEqual({
+      ok: false,
+      error: 'The website blueprint request was not accepted.',
+      errorCode: 'capture-in-progress',
+    });
+    expect(ack.store.has('website-blueprint-request')).toBe(false);
+
+    const invalidAck = await loadBackground(createStub());
+    invalidAck.tabs.sendMessage.mockImplementation(async (_tabId: number, message: { type: string }) => {
+      if (message.type === MessageType.Ping) return { type: MessageType.Pong };
+      if (message.type === MessageType.ExtractWebsiteBlueprint) return undefined;
+      return { ok: true };
+    });
+    expect(await startBlueprintExtraction(invalidAck, 'bp-invalid-ack')).toEqual({
+      ok: false,
+      error: 'Invalid acknowledgement from the website blueprint extractor.',
+      errorCode: 'invalid-ack',
+    });
+    expect(invalidAck.store.has('website-blueprint-request')).toBe(false);
+  });
+
+  it('returns a typed acknowledgement when pending state cannot be stored', async () => {
+    const base = createStub();
+    base.storage.session.set = vi.fn().mockRejectedValue(new Error('session unavailable'));
+    const stub = await loadBackground(base);
+    useLiveContent(stub);
+
+    expect(await startBlueprintExtraction(stub, 'bp-storage-failure')).toEqual({
+      ok: false,
+      error: 'session unavailable',
+      errorCode: 'website-blueprint-extraction-failed',
+    });
+    expect(stub.store.has('website-blueprint-request')).toBe(false);
+  });
+
+  it('delivers a result emitted before the acknowledgement resolves', async () => {
+    const stub = await loadBackground(createStub());
+    const requestId = 'bp-early-event';
+    stub.tabs.query.mockResolvedValue([{ id: 42, url: 'https://example.com/page' }]);
+    stub.tabs.sendMessage.mockImplementation(async (_tabId: number, message: { type: string; requestId?: string }) => {
+      if (message.type === MessageType.Ping) return { type: MessageType.Pong };
+      if (message.type === MessageType.ExtractWebsiteBlueprint) {
+        void dispatch(stub, {
+          type: MessageType.BlueprintChanged,
+          payload: blueprintFor(requestId),
+        }, { tab: { id: 42, url: 'https://example.com/page' } });
+        return { ok: true };
+      }
+      return { ok: true };
+    });
+
+    expect(await startBlueprintExtraction(stub, requestId)).toEqual({ ok: true });
+    await flush();
+    expect(sentEvents(stub, MessageType.BlueprintChanged)).toHaveLength(1);
+    expect(stub.store.has('website-blueprint-request')).toBe(false);
+  });
+
+  it('rejects wrong request, wrong tab, wrong URL, missing sender, and malformed payloads', async () => {
+    const stub = await loadBackground(createStub());
+    useLiveContent(stub);
+    await startBlueprintExtraction(stub, 'bp-validate');
+    const blueprint = blueprintFor('bp-validate');
+    const sender = { tab: { id: 42, url: 'https://example.com/page' } };
+
+    await dispatch(stub, {
+      type: MessageType.BlueprintChanged,
+      payload: blueprintFor('bp-wrong'),
+    }, sender);
+    await dispatch(stub, {
+      type: MessageType.BlueprintChanged,
+      payload: blueprint,
+    }, { tab: { id: 99, url: 'https://example.com/page' } });
+    await dispatch(stub, {
+      type: MessageType.BlueprintChanged,
+      payload: blueprint,
+    }, { tab: { id: 42, url: 'https://example.com/elsewhere' } });
+    await dispatch(stub, {
+      type: MessageType.BlueprintChanged,
+      payload: blueprint,
+    }, {});
+    expect(await dispatch(stub, {
+      type: MessageType.BlueprintChanged,
+      payload: {},
+    }, sender)).toBe(false);
+    expect(sentEvents(stub, MessageType.BlueprintChanged)).toHaveLength(0);
+
+    expect(await dispatch(stub, {
+      type: MessageType.BlueprintChanged,
+      payload: blueprint,
+    }, sender)).toEqual({ ok: true });
+    expect(sentEvents(stub, MessageType.BlueprintChanged)).toHaveLength(1);
+  });
+
+  it('ignores malformed stored pending state', async () => {
+    const base = createStub();
+    base.store.set('website-blueprint-request', {
+      tabId: '42',
+      requestId: 'bp-malformed',
+      url: 'https://example.com/page',
+    });
+    const stub = await loadBackground(base);
+
+    await dispatch(stub, {
+      type: MessageType.BlueprintChanged,
+      payload: blueprintFor('bp-malformed'),
+    }, { tab: { id: 42, url: 'https://example.com/page' } });
+    expect(sentEvents(stub, MessageType.BlueprintChanged)).toHaveLength(0);
+  });
+
+  it('broadcasts a matching website-blueprint error and clears only its pending state', async () => {
+    const stub = await loadBackground(createStub());
+    useLiveContent(stub);
+    await startBlueprintExtraction(stub, 'bp-error');
+    const sender = { tab: { id: 42, url: 'https://example.com/page' } };
+
+    expect(await dispatch(stub, {
+      type: MessageType.RuntimeError,
+      payload: {
+        source: 'website-blueprint',
+        requestId: 'bp-error',
+        message: 'capture failed',
+        code: 'website-blueprint-extraction-failed',
+      },
+    }, sender)).toEqual({ ok: true });
+    expect(sentEvents(stub, MessageType.RuntimeError)).toHaveLength(1);
+    expect(stub.store.has('website-blueprint-request')).toBe(false);
+
+    await startBlueprintExtraction(stub, 'bp-unrelated-error');
+    await dispatch(stub, {
+      type: MessageType.RuntimeError,
+      payload: {
+        source: 'design-system',
+        requestId: 'bp-unrelated-error',
+        message: 'not blueprint',
+      },
+    }, sender);
+    expect(sentEvents(stub, MessageType.RuntimeError)).toHaveLength(1);
+    expect(stub.store.has('website-blueprint-request')).toBe(true);
+  });
+
+  it('clears pending blueprints on tab switch, closure, and navigation', async () => {
+    const stub = await loadBackground(createStub());
+    useLiveContent(stub);
+    const event = {
+      type: MessageType.BlueprintChanged,
+      payload: blueprintFor('bp-clear'),
+    };
+    const sender = { tab: { id: 42, url: 'https://example.com/page' } };
+
+    await startBlueprintExtraction(stub, 'bp-clear');
+    const onActivated = stub.tabs.onActivated.addListener.mock.calls[0]?.[0] as
+      | ((details: { tabId: number }) => void)
+      | undefined;
+    onActivated?.({ tabId: 99 });
+    await flush();
+    await dispatch(stub, event, sender);
+    expect(stub.store.has('website-blueprint-request')).toBe(false);
+
+    await startBlueprintExtraction(stub, 'bp-clear');
+    const onRemoved = stub.tabs.onRemoved.addListener.mock.calls[0]?.[0] as
+      | ((tabId: number) => void)
+      | undefined;
+    onRemoved?.(42);
+    await flush();
+    await dispatch(stub, event, sender);
+    expect(stub.store.has('website-blueprint-request')).toBe(false);
+
+    await startBlueprintExtraction(stub, 'bp-clear');
+    const onUpdated = stub.tabs.onUpdated.addListener.mock.calls[0]?.[0] as
+      | ((tabId: number, changeInfo: { url?: string }) => void)
+      | undefined;
+    onUpdated?.(42, { url: 'https://example.com/new' });
+    await flush();
+    await dispatch(stub, event, sender);
+    expect(stub.store.has('website-blueprint-request')).toBe(false);
+    expect(sentEvents(stub, MessageType.BlueprintChanged)).toHaveLength(0);
+  });
+
+  it('keeps design system, inspector, and motion state untouched', async () => {
+    const base = createStub();
+    const state = { tabId: 7, active: true, lastTabId: 7 };
+    base.store.set('inspection', state);
+    const stub = await loadBackground(base);
+    useLiveContent(stub);
+
+    await startExtraction(stub, 'ds-isolation');
+    await startBlueprintExtraction(stub, 'bp-isolation');
+    const sender = { tab: { id: 42, url: 'https://example.com/page' } };
+    await dispatch(stub, {
+      type: MessageType.BlueprintChanged,
+      payload: blueprintFor('bp-isolation'),
+    }, sender);
+
+    expect(sentEvents(stub, MessageType.BlueprintChanged)).toHaveLength(1);
+    expect(stub.store.has('website-blueprint-request')).toBe(false);
+    expect(stub.store.get('design-system-request')).toEqual({
+      tabId: 42,
+      requestId: 'ds-isolation',
+      url: 'https://example.com/page',
+    });
+    expect(stub.store.get('inspection')).toEqual(state);
+    expect(sentEvents(stub, MessageType.DesignSystemChanged)).toHaveLength(0);
+
+    await dispatch(stub, {
+      type: MessageType.DesignSystemChanged,
+      payload: makeDesignSystemSnapshot({ requestId: 'ds-isolation' }),
+    }, sender);
+    expect(sentEvents(stub, MessageType.DesignSystemChanged)).toHaveLength(1);
+
+    expect(await dispatch(stub, { type: MessageType.GetSnapshot }, {})).toEqual({ ok: true });
+    expect(stub.tabs.sendMessage).toHaveBeenCalledWith(7, { type: MessageType.GetSnapshot });
+    expect(await dispatch(stub, {
+      type: MessageType.ReplayMotion,
+      action: 'isolated-start',
+      animationId: 'a1',
+    }, {})).toEqual({ ok: true });
+    expect(stub.tabs.sendMessage).toHaveBeenCalledWith(7, {
+      type: MessageType.ReplayMotion,
+      action: 'isolated-start',
+      animationId: 'a1',
+    });
+    expect(stub.store.get('inspection')).toEqual(state);
+  });
+
+  it('still broadcasts a valid result when pending cleanup fails', async () => {
+    const base = createStub();
+    base.storage.session.remove = vi.fn().mockRejectedValue(new Error('remove failed'));
+    const stub = await loadBackground(base);
+    useLiveContent(stub);
+    await startBlueprintExtraction(stub, 'bp-cleanup-failure');
+
+    expect(await dispatch(stub, {
+      type: MessageType.BlueprintChanged,
+      payload: blueprintFor('bp-cleanup-failure'),
+    }, { tab: { id: 42, url: 'https://example.com/page' } })).toEqual({ ok: true });
+    expect(sentEvents(stub, MessageType.BlueprintChanged)).toHaveLength(1);
   });
 });

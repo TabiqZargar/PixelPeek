@@ -6,6 +6,9 @@ import {
   isInspectionState,
   isMotionReplayAction,
   isPanelEvent,
+  isRequestResult,
+  isWebsiteBlueprint,
+  isWebsiteBlueprintRequest,
   type ContentEvent,
   type ContentRequest,
   type PanelEvent,
@@ -78,6 +81,70 @@ async function clearDesignRequestForTab(tabId: number): Promise<void> {
 async function clearDesignRequestOnActivation(tabId: number): Promise<void> {
   const pending = await getDesignRequest();
   if (pending && pending.tabId !== tabId) await clearDesignRequest();
+}
+
+const BLUEPRINT_REQUEST_KEY = 'website-blueprint-request';
+
+interface BlueprintRequestState {
+  tabId: number;
+  requestId: string;
+  url: string;
+}
+
+type PanelBlueprintEvent = Extract<PanelEvent, { type: typeof MessageType.BlueprintChanged }>;
+
+async function getBlueprintRequest(): Promise<BlueprintRequestState | null> {
+  const stored = await chrome.storage.session.get(BLUEPRINT_REQUEST_KEY);
+  const value: unknown = stored[BLUEPRINT_REQUEST_KEY];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const request = value as Record<string, unknown>;
+  if (typeof request.tabId !== 'number' || !Number.isInteger(request.tabId)) return null;
+  if (!isWebsiteBlueprintRequest({
+    type: MessageType.ExtractWebsiteBlueprint,
+    requestId: request.requestId,
+  })) return null;
+  if (typeof request.url !== 'string' || !isInspectableUrl(request.url)) return null;
+  return {
+    tabId: request.tabId,
+    requestId: request.requestId as string,
+    url: request.url,
+  };
+}
+
+async function setBlueprintRequest(request: BlueprintRequestState): Promise<void> {
+  await chrome.storage.session.set({ [BLUEPRINT_REQUEST_KEY]: request });
+}
+
+async function clearBlueprintRequest(): Promise<void> {
+  await chrome.storage.session.remove(BLUEPRINT_REQUEST_KEY);
+}
+
+async function clearBlueprintRequestSafely(): Promise<void> {
+  try {
+    await clearBlueprintRequest();
+  } catch {
+    return;
+  }
+}
+
+async function clearBlueprintRequestForTab(tabId: number): Promise<void> {
+  const pending = await getBlueprintRequest().catch(() => null);
+  if (pending?.tabId === tabId) await clearBlueprintRequestSafely();
+}
+
+async function clearBlueprintRequestOnActivation(tabId: number): Promise<void> {
+  const pending = await getBlueprintRequest().catch(() => null);
+  if (pending && pending.tabId !== tabId) await clearBlueprintRequestSafely();
+}
+
+function matchesBlueprintSender(
+  sender: chrome.runtime.MessageSender,
+  pending: BlueprintRequestState,
+): boolean {
+  const senderTabId = sender.tab?.id;
+  if (senderTabId === undefined || senderTabId !== pending.tabId) return false;
+  const senderUrl = sender.tab?.url;
+  return isInspectableUrl(senderUrl) && senderUrl === pending.url;
 }
 
 async function getState(): Promise<InspectionState> {
@@ -206,6 +273,78 @@ async function extractDesignSystem(request: unknown): Promise<RequestResult> {
   }
 }
 
+async function extractWebsiteBlueprint(request: unknown): Promise<RequestResult> {
+  if (!isWebsiteBlueprintRequest(request)) {
+    return {
+      ok: false,
+      error: 'Invalid website blueprint request.',
+      errorCode: 'invalid-request',
+    };
+  }
+
+  let tabId: number | undefined;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || tab.id === undefined) {
+      return { ok: false, error: 'There is no active tab to inspect.', errorCode: 'no-active-tab' };
+    }
+    const url = tab.url ?? '';
+    if (!isInspectableUrl(url)) {
+      return {
+        ok: false,
+        error: 'This page cannot be inspected. Try a regular http(s) website.',
+        errorCode: 'unsupported-url',
+      };
+    }
+
+    tabId = tab.id;
+    await setBlueprintRequest({ tabId, requestId: request.requestId, url });
+
+    if (!(await pingTab(tabId))) {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+      if (!(await pingTab(tabId))) {
+        await clearBlueprintRequestSafely();
+        return {
+          ok: false,
+          error: 'The website blueprint extractor could not start on this page.',
+          errorCode: 'injection-failed',
+        };
+      }
+    }
+
+    const ack: unknown = await chrome.tabs.sendMessage(tabId, {
+      type: MessageType.ExtractWebsiteBlueprint,
+      requestId: request.requestId,
+    });
+    if (!isRequestResult(ack) || !ack.ok) {
+      await clearBlueprintRequestSafely();
+      return {
+        ok: false,
+        error: isRequestResult(ack)
+          ? ack.error ?? 'The website blueprint request was not accepted.'
+          : 'Invalid acknowledgement from the website blueprint extractor.',
+        errorCode: isRequestResult(ack)
+          ? ack.errorCode ?? 'website-blueprint-extraction-failed'
+          : 'invalid-ack',
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    const current = await getBlueprintRequest().catch(() => null);
+    if (
+      current?.requestId === request.requestId &&
+      (tabId === undefined || current.tabId === tabId)
+    ) {
+      await clearBlueprintRequestSafely();
+    }
+    return {
+      ok: false,
+      error: describeMessageError(error),
+      errorCode: 'website-blueprint-extraction-failed',
+    };
+  }
+}
+
 async function onDesignSystemEvent(
   message: PanelDesignEvent,
   sender: chrome.runtime.MessageSender,
@@ -222,6 +361,19 @@ async function onDesignSystemEvent(
     return;
   }
   await clearDesignRequest();
+  broadcast(message);
+}
+
+async function onWebsiteBlueprintEvent(
+  message: PanelBlueprintEvent,
+  sender: chrome.runtime.MessageSender,
+): Promise<void> {
+  if (!isWebsiteBlueprint(message.payload)) return;
+  const pending = await getBlueprintRequest().catch(() => null);
+  if (!pending) return;
+  if (!matchesBlueprintSender(sender, pending)) return;
+  if (message.payload.metadata.requestId !== pending.requestId) return;
+  await clearBlueprintRequestSafely();
   broadcast(message);
 }
 
@@ -311,11 +463,24 @@ async function onContentEvent(
     if (sender) await onDesignSystemEvent(message, sender);
     return;
   }
+  if (message.type === MessageType.BlueprintChanged) {
+    if (sender) await onWebsiteBlueprintEvent(message, sender);
+    return;
+  }
   if (message.type === MessageType.RuntimeError && message.payload.source === 'design-system') {
     if (!sender) return;
     const pending = await getDesignRequest();
     if (!pending || pending.requestId !== message.payload.requestId) return;
     if (!matchesDesignSender(sender, pending)) return;
+    broadcast(message);
+    return;
+  }
+  if (message.type === MessageType.RuntimeError && message.payload.source === 'website-blueprint') {
+    if (!sender) return;
+    const pending = await getBlueprintRequest().catch(() => null);
+    if (!pending || pending.requestId !== message.payload.requestId) return;
+    if (!matchesBlueprintSender(sender, pending)) return;
+    await clearBlueprintRequestSafely();
     broadcast(message);
     return;
   }
@@ -376,6 +541,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     }));
     return true;
   }
+  if (type === MessageType.ExtractWebsiteBlueprint) {
+    void extractWebsiteBlueprint(message).then(sendResponse, (error: unknown) => sendResponse({
+      ok: false,
+      error: describeMessageError(error),
+      errorCode: 'website-blueprint-extraction-failed',
+    }));
+    return true;
+  }
   if (type === MessageType.GetSnapshot) {
     void forwardToContent({ type: MessageType.GetSnapshot }).then(sendResponse);
     return true;
@@ -430,6 +603,7 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
     if (selectedTabId !== null && selectedTabId !== tabId) void clearInspection(state);
   });
   void clearDesignRequestOnActivation(tabId);
+  void clearBlueprintRequestOnActivation(tabId);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -438,6 +612,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (state.tabId === tabId || state.lastTabId === tabId) void clearInspection(state);
   });
   void clearDesignRequestForTab(tabId);
+  void clearBlueprintRequestForTab(tabId);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -445,4 +620,5 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     if (state.tabId === tabId || state.lastTabId === tabId) void clearInspection(state);
   });
   void clearDesignRequestForTab(tabId);
+  void clearBlueprintRequestForTab(tabId);
 });
