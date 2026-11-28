@@ -7,7 +7,9 @@ import { Inspector } from './components/Inspector';
 import { MotionWorkspace } from './components/MotionWorkspace';
 import { SettingsView } from './components/SettingsView';
 import { Sidebar, type View } from './components/Sidebar';
+import { WebsiteBlueprintWorkspace } from './components/WebsiteBlueprintWorkspace';
 import { useDesignSystem } from './hooks/useDesignSystem';
+import { useWebsiteBlueprint } from './hooks/useWebsiteBlueprint';
 
 export function App() {
   const [view, setView] = useState<View>('inspector');
@@ -28,6 +30,7 @@ export function App() {
     copyCss,
   } = useInspector();
   const design = useDesignSystem();
+  const website = useWebsiteBlueprint();
 
   const changeView = useCallback((next: View) => {
     if (view === 'inspector' && next !== 'inspector' && status === 'active') void stop();
@@ -79,6 +82,20 @@ export function App() {
           replayValid={replayValid}
           onCopyText={(text, key) => void copyText(text, key)}
           onReplay={(action, animationId) => void replay(action, animationId)}
+        />
+      )}
+      {view === 'website-blueprint' && (
+        <WebsiteBlueprintWorkspace
+          blueprint={website.blueprint}
+          status={website.status}
+          error={website.error}
+          errorCode={website.errorCode}
+          copiedKey={website.copiedKey}
+          exportFeedback={website.exportFeedback}
+          metrics={metrics}
+          onExtract={() => void website.extract()}
+          onCopyJson={() => void website.copyJson()}
+          onDownloadJson={() => void website.downloadJson()}
         />
       )}
       {view === 'agent-prompts' && (

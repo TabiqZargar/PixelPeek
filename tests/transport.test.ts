@@ -3,10 +3,12 @@ import { MessageType } from '../src/shared/messages';
 import {
   extractDesignSystem,
   extractWebsiteBlueprint,
+  getActiveTabInfo,
   getInspectionState,
   getSnapshot,
-  navigateHierarchy,
   hasRuntime,
+  navigateHierarchy,
+  onActiveTabChanged,
   onPanelEvent,
   pingTab,
   replayMotion,
@@ -24,6 +26,10 @@ function stubChrome(overrides: Record<string, unknown> = {}) {
   };
   const tabs = {
     sendMessage: vi.fn(),
+    query: vi.fn().mockResolvedValue([{ id: 7, url: 'https://example.com/' }]),
+    onActivated: { addListener: vi.fn(), removeListener: vi.fn() },
+    onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
+    onRemoved: { addListener: vi.fn(), removeListener: vi.fn() },
     ...(overrides.tabs as Record<string, unknown> | undefined),
   };
   vi.stubGlobal('chrome', { runtime, tabs });
@@ -213,5 +219,42 @@ describe('Phase 5 website blueprint transport', () => {
 
     handler?.({ type: MessageType.BlueprintChanged, payload: {} });
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads active tab ownership for panel-side event filtering', async () => {
+    const { tabs } = stubChrome();
+    tabs.query.mockResolvedValueOnce([{ id: 12, url: 'https://example.com/design' }]);
+    await expect(getActiveTabInfo()).resolves.toEqual({
+      tabId: 12,
+      url: 'https://example.com/design',
+      origin: 'https://example.com',
+    });
+    expect(tabs.query).toHaveBeenCalledWith({ active: true, currentWindow: true });
+  });
+
+  it('observes activation, navigation and removal lifecycle changes', () => {
+    const { tabs } = stubChrome();
+    const listener = vi.fn();
+    const dispose = onActiveTabChanged(listener);
+    expect(tabs.onActivated.addListener).toHaveBeenCalledTimes(1);
+    expect(tabs.onUpdated.addListener).toHaveBeenCalledTimes(1);
+    expect(tabs.onRemoved.addListener).toHaveBeenCalledTimes(1);
+
+    const onActivated = tabs.onActivated.addListener.mock.calls[0]?.[0] as () => void;
+    const onUpdated = tabs.onUpdated.addListener.mock.calls[0]?.[0] as
+      | ((tabId: number, changeInfo: { url?: string }) => void)
+      | undefined;
+    const onRemoved = tabs.onRemoved.addListener.mock.calls[0]?.[0] as () => void;
+    onActivated();
+    onUpdated?.(12, {});
+    expect(listener).toHaveBeenCalledTimes(1);
+    onUpdated?.(12, { url: 'https://example.com/next' });
+    onRemoved();
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    dispose();
+    expect(tabs.onActivated.removeListener).toHaveBeenCalledWith(onActivated);
+    expect(tabs.onUpdated.removeListener).toHaveBeenCalledWith(onUpdated);
+    expect(tabs.onRemoved.removeListener).toHaveBeenCalledWith(onRemoved);
   });
 });

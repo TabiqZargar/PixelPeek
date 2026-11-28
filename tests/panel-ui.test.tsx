@@ -126,6 +126,10 @@ describe('panel UI at narrow widths', () => {
       (button) => button.textContent === 'Design System',
     );
     expect(designNav?.disabled).toBe(false);
+    const blueprintNav = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Website Blueprint',
+    );
+    expect(blueprintNav?.disabled).toBe(false);
     expect(container.querySelectorAll('[style*="width"]').length).toBeGreaterThan(0);
     expect(container.querySelector('main')?.className).toContain('min-w-0');
   });

@@ -81,6 +81,49 @@ export async function extractWebsiteBlueprint(requestId: string): Promise<Reques
   return sendToBackground(request);
 }
 
+export interface ActiveTabInfo {
+  tabId: number | null;
+  url: string | null;
+  origin: string | null;
+}
+
+function originOf(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+export async function getActiveTabInfo(): Promise<ActiveTabInfo> {
+  if (!hasRuntime()) throw runtimeUnavailableError();
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const url = tab?.url ?? null;
+  return {
+    tabId: tab?.id ?? null,
+    url,
+    origin: originOf(url),
+  };
+}
+
+export function onActiveTabChanged(listener: () => void): () => void {
+  if (!hasRuntime()) return () => {};
+  const onActivated = () => listener();
+  const onUpdated = (_tabId: number, changeInfo: { url?: string }) => {
+    if (changeInfo.url !== undefined) listener();
+  };
+  const onRemoved = () => listener();
+  chrome.tabs.onActivated.addListener(onActivated);
+  chrome.tabs.onUpdated.addListener(onUpdated);
+  chrome.tabs.onRemoved.addListener(onRemoved);
+  return () => {
+    chrome.tabs.onActivated.removeListener(onActivated);
+    chrome.tabs.onUpdated.removeListener(onUpdated);
+    chrome.tabs.onRemoved.removeListener(onRemoved);
+  };
+}
+
 export async function pingTab(tabId: number): Promise<boolean> {
   if (!hasRuntime()) return false;
   try {
