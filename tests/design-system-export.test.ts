@@ -42,6 +42,18 @@ describe('design-system CSS export', () => {
     expect((css.match(/\{/g) ?? []).length).toBe((css.match(/\}/g) ?? []).length);
     expect(serializeDesignSystemCss(makeDesignSystemSnapshot(), 5).length).toBeLessThanOrEqual(5);
   });
+
+  it('fits exactly one declaration without counting the dropped header twice', () => {
+    const declaration = '  --accent-purple: rgb(139, 109, 255);';
+    const expected = [':root {', declaration, '}'].join('\n');
+    expect(serializeDesignSystemCss(makeDesignSystemSnapshot(), expected.length)).toBe(expected);
+    expect(serializeDesignSystemCss(makeDesignSystemSnapshot(), expected.length - 1)).toBe(':root {\n}');
+  });
+
+  it('emits the minimal block only when no declaration can fit', () => {
+    expect(serializeDesignSystemCss(makeDesignSystemSnapshot(), 7)).toBe(':root{}');
+    expect(serializeDesignSystemCss(makeDesignSystemSnapshot(), 6)).toBe('');
+  });
 });
 
 describe('design-system JSON export', () => {

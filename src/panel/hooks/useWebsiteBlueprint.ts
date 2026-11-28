@@ -10,6 +10,7 @@ import {
 } from '../../shared/transport';
 import type { WebsiteBlueprint } from '../../shared/types';
 import { writeClipboard } from '../clipboard';
+import { stringifyBlueprint } from '../exports/serialize';
 
 export type WebsiteBlueprintStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -232,7 +233,7 @@ export function useWebsiteBlueprint() {
       setExportFeedback({ kind: 'error', message: 'There is no validated blueprint to copy.' });
       return false;
     }
-    const ok = await writeClipboard(JSON.stringify(current, null, 2));
+    const ok = await writeClipboard(stringifyBlueprint(current));
     setCopiedKey(ok ? 'blueprint-json' : null);
     setExportFeedback({
       kind: ok ? 'success' : 'error',
@@ -251,7 +252,7 @@ export function useWebsiteBlueprint() {
       return false;
     }
     try {
-      const json = JSON.stringify(current, null, 2);
+      const json = stringifyBlueprint(current);
       const blob = new Blob([json], { type: 'application/json' });
       const objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement('a');

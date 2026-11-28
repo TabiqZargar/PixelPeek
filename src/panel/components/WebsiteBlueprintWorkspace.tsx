@@ -7,6 +7,7 @@ import type {
   DesignSystemCategory,
   WebsiteBlueprint,
 } from '../../shared/types';
+import { stringifyBlueprint } from '../exports/serialize';
 import type { ExportFeedback, WebsiteBlueprintStatus } from '../hooks/useWebsiteBlueprint';
 import type { PanelMetrics } from '../hooks/usePanelWidth';
 import { Field, Section } from './Field';
@@ -629,7 +630,7 @@ function ExportPanel({
   onCopyJson: () => void;
   onDownloadJson: () => void;
 }) {
-  const json = useMemo(() => JSON.stringify(blueprint, null, 2), [blueprint]);
+  const json = useMemo(() => stringifyBlueprint(blueprint), [blueprint]);
   return (
     <div className="space-y-3">
       <Notice>Exports use only the validated blueprint returned by this capture.</Notice>

@@ -7,6 +7,7 @@ import {
   type DesignSystemCategory,
   type WebsiteBlueprint,
 } from '../../shared/types';
+import { escapeMarkdown } from './serialize';
 import { EXPORT_FORMATS, EXPORT_LIMITS, type ExportOptions, type ExportResult } from './types';
 
 const NONE = 'none reported';
@@ -33,10 +34,6 @@ function normalizeMaxChars(options: ExportOptions | undefined): number {
   return max;
 }
 
-function escapeMarkdown(value: string): string {
-  return value.replace(/[\\`*_\[\]#<>|]/g, '\\$&');
-}
-
 function md(value: string | null | undefined, fallback = NOT_OBSERVED): string {
   const trimmed = typeof value === 'string' ? value.trim() : '';
   return trimmed.length > 0 ? escapeMarkdown(trimmed) : fallback;
@@ -57,7 +54,7 @@ function formatGeometry(value: { x: number; y: number; width: number; height: nu
 function formatEvidence(items: readonly BlueprintEvidenceItem[]): string {
   if (items.length === 0) return NONE;
   return items
-    .map((item) => `${item.source} (${item.status})${item.note ? `: ${md(item.note)}` : ''}`)
+    .map((item) => `${md(item.source)} (${md(item.status)})${item.note ? `: ${md(item.note)}` : ''}`)
     .join('; ');
 }
 

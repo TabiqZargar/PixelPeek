@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { serializeDesignSystemCss } from '../src/content/design-system-export';
 import { isWebsiteBlueprint } from '../src/shared/messages';
 import type { WebsiteBlueprint } from '../src/shared/types';
+import { serializeBlueprintAgentPrompt } from '../src/panel/exports/agent-prompt';
 import { serializeDesignTokensCss } from '../src/panel/exports/design-tokens';
 import {
+  escapeMarkdown,
   serializeBlueprintJson,
   serializeComponentInventory,
   serializeImplementationBrief,
@@ -20,6 +22,14 @@ const serializers = [
   { id: 'design-tokens-css', run: serializeDesignTokensCss },
   { id: 'component-inventory', run: serializeComponentInventory },
   { id: 'layout-specification', run: serializeLayoutSpecification },
+  { id: 'blueprint-agent-prompt', run: serializeBlueprintAgentPrompt },
+] as const;
+
+const markdownSerializers = [
+  serializeImplementationBrief,
+  serializeComponentInventory,
+  serializeLayoutSpecification,
+  serializeBlueprintAgentPrompt,
 ] as const;
 
 describe('export serializers', () => {
@@ -76,8 +86,111 @@ describe('export serializers', () => {
 describe('Blueprint JSON export', () => {
   it('preserves the validated blueprint exactly', () => {
     const result = serializeBlueprintJson(blueprint);
-    expect(result.content).toBe(JSON.stringify(blueprint, null, 2));
     expect(JSON.parse(result.content)).toEqual(blueprint);
+  });
+
+  it('preserves every legitimate field in a fully populated blueprint', () => {
+    const populated = makeWebsiteBlueprint({
+      motion: {
+        ...blueprint.motion,
+        summary: {
+          ...blueprint.motion.summary,
+          animationCount: 1,
+          cssAnimationCount: 1,
+          runningCount: 1,
+          animatedProperties: ['opacity'],
+        },
+        observations: [{
+          ref: 'ref-4',
+          targetRef: 'ref-2',
+          source: 'css-animation',
+          category: 'button',
+          role: 'button',
+          name: 'pulse',
+          timing: {
+            duration: 1200,
+            delay: 0,
+            iterations: null,
+            infinite: true,
+            direction: 'normal',
+            fill: 'none',
+            easing: 'ease-in-out',
+            playState: 'running',
+            currentTime: 300,
+            playbackRate: 1,
+          },
+          properties: [{ name: 'opacity', value: '0.5' }],
+          evidence: [{ source: 'motion-event', status: 'detected', note: 'observed' }],
+          unavailable: [],
+          limitations: [],
+        }],
+        easings: [{
+          value: 'ease-in-out',
+          kind: 'keyword',
+          points: [0.42, 0, 0.58, 1],
+          visualizable: true,
+        }],
+      },
+    });
+    const parsed = JSON.parse(serializeBlueprintJson(populated).content);
+    expect(parsed).toEqual(populated);
+    expect(parsed.motion.observations).toEqual(populated.motion.observations);
+    expect(parsed.motion.easings).toEqual(populated.motion.easings);
+    const token = populated.designSystem.tokens[0];
+    if (!token) throw new Error('Fixture token is missing.');
+    expect(parsed.designSystem.tokens[0].detected.exemplars).toEqual(token.detected.exemplars);
+  });
+
+  it('allowlisted serialization strips unknown top-level and nested fields without mutating input', () => {
+    const withUnknown = {
+      ...blueprint,
+      bodyText: 'private page text',
+      arbitraryNote: 'stripped metadata',
+      components: blueprint.components.map((component) => ({
+        ...component,
+        examples: component.examples.map((example) => ({
+          ...example,
+          hiddenNested: 'nested secret',
+        })),
+      })),
+    } as WebsiteBlueprint & { bodyText: string; arbitraryNote: string };
+    const before = JSON.stringify(withUnknown);
+    const result = serializeBlueprintJson(withUnknown);
+    const parsed = JSON.parse(result.content);
+
+    expect(JSON.stringify(withUnknown)).toBe(before);
+    expect(parsed).toEqual(blueprint);
+    expect(result.content).not.toContain('bodyText');
+    expect(result.content).not.toContain('arbitraryNote');
+    expect(result.content).not.toContain('private page text');
+    expect(result.content).not.toContain('hiddenNested');
+    expect(result.content).not.toContain('nested secret');
+  });
+
+  it('rejects malformed known fields and forbidden or URL-bearing unknown fields', () => {
+    const malformed = makeWebsiteBlueprint({
+      metadata: {
+        ...blueprint.metadata,
+        viewport: { ...blueprint.metadata.viewport, width: Number.NaN },
+      },
+    });
+    const forbidden = {
+      ...blueprint,
+      innerText: 'private page text',
+      textContent: 'private page text',
+      sourceUrl: 'https://evil.example/tracker?token=abc',
+      designSystem: {
+        ...blueprint.designSystem,
+        screenshot: 'data:image/png;base64,AAAA',
+      },
+    } as WebsiteBlueprint & Record<string, unknown>;
+
+    expect(isWebsiteBlueprint(malformed)).toBe(false);
+    expect(isWebsiteBlueprint(forbidden)).toBe(false);
+    expect(() => serializeBlueprintJson(malformed)).toThrow(TypeError);
+    for (const { run } of serializers) {
+      expect(() => run(forbidden)).toThrow(TypeError);
+    }
   });
 });
 
@@ -192,6 +305,178 @@ describe('Layout Specification export', () => {
     expect(result.content).toContain('No geometry observations were supplied.');
     expect(result.content).not.toContain('ref-4');
   });
+
+  it('separates unavailable observations from known limitations', () => {
+    const mixed = makeWebsiteBlueprint({
+      structure: {
+        ...blueprint.structure,
+        unavailable: ['Landmark labels were not readable'],
+        limitations: ['DOM sampling was partial'],
+      },
+    });
+    const content = serializeLayoutSpecification(mixed).content;
+    const unavailableStart = content.indexOf('## Unavailable observations');
+    const limitationsStart = content.indexOf('## Limitations');
+    const unavailableSection = content.slice(unavailableStart, limitationsStart);
+    const limitationsSection = content.slice(limitationsStart);
+
+    expect(unavailableStart).toBeGreaterThan(-1);
+    expect(limitationsStart).toBeGreaterThan(unavailableStart);
+    expect(unavailableSection).toContain('Landmark labels were not readable');
+    expect(unavailableSection).not.toContain('DOM sampling was partial');
+    expect(limitationsSection).toContain('DOM sampling was partial');
+    expect(limitationsSection).not.toContain('Landmark labels were not readable');
+  });
+
+  it('handles empty unavailable and limitation sections consistently', () => {
+    const empty = makeWebsiteBlueprint({
+      components: [],
+      layout: [],
+      visualReferences: [],
+      structure: {
+        nodes: [],
+        sectionRefs: [],
+        unavailable: [],
+        limitations: [],
+      },
+      designSystem: {
+        ...blueprint.designSystem,
+        unavailable: [],
+        limitations: [],
+      },
+      motion: {
+        ...blueprint.motion,
+        unavailable: [],
+        limitations: [],
+      },
+      evidence: {
+        items: [],
+        unavailable: [],
+        limitations: [],
+      },
+    });
+    const content = serializeLayoutSpecification(empty).content;
+    const unavailableStart = content.indexOf('## Unavailable observations');
+    const limitationsStart = content.indexOf('## Limitations');
+    const unavailableSection = content.slice(unavailableStart, limitationsStart);
+    const limitationsSection = content.slice(limitationsStart);
+
+    expect(unavailableSection).toContain('- none reported');
+    expect(limitationsSection).toContain('- none reported');
+    expect(unavailableSection).not.toContain('## Limitations');
+    expect(limitationsSection).not.toContain('Unavailable data');
+  });
+});
+
+describe('Markdown escaping across serializers', () => {
+  const injection = 'A *bold* _note_ `code` [label](https://example.com/x) #tag | pipe';
+  const adversarial = makeWebsiteBlueprint({
+    structure: {
+      ...blueprint.structure,
+      nodes: blueprint.structure.nodes.map((node) => ({
+        ...node,
+        evidence: [{ source: 'sampling', status: 'inferred', note: injection }],
+        unavailable: [injection],
+        limitations: [injection],
+      })),
+    },
+    components: blueprint.components.map((component) => ({
+      ...component,
+      evidence: [{ source: 'sampling', status: 'inferred', note: injection }],
+      unavailable: [injection],
+      limitations: [injection],
+    })),
+    evidence: {
+      ...blueprint.evidence,
+      unavailable: [injection],
+      limitations: [injection],
+    },
+    motion: {
+      ...blueprint.motion,
+      unavailable: [injection],
+      limitations: [injection],
+    },
+    responsive: {
+      ...blueprint.responsive,
+      unobservedBreakpoints: [injection],
+    },
+    designSystem: {
+      ...blueprint.designSystem,
+      unavailable: [injection],
+      limitations: [injection],
+    },
+  });
+  const once = escapeMarkdown(injection);
+  const twice = escapeMarkdown(once);
+
+  it('escapes Markdown syntax exactly once in every Markdown serializer', () => {
+    for (const run of markdownSerializers) {
+      const content = run(adversarial).content;
+      expect(content).toContain(once);
+      expect(content).not.toContain(twice);
+      expect(content).not.toContain('[label](');
+      expect(content).not.toContain('*bold*');
+      expect(content).not.toContain('`code`');
+    }
+  });
+
+  it('normalizes line breaks and escapes link and table syntax', () => {
+    expect(escapeMarkdown('first\nsecond')).toBe('first second');
+    expect(escapeMarkdown('[a](b) | #c')).toBe('\\[a\\](b) \\| \\#c');
+  });
+});
+
+describe('export privacy', () => {
+  it('strips benign unknown properties from every public format', () => {
+    const withUnknown = {
+      ...blueprint,
+      bodyText: 'private page text',
+      arbitraryAttribute: 'secret attribute',
+      designSystem: {
+        ...blueprint.designSystem,
+        nestedAttribute: 'nested attribute',
+      },
+    } as WebsiteBlueprint & Record<string, unknown>;
+
+    for (const { run } of serializers) {
+      const content = run(withUnknown).content;
+      expect(content).not.toContain('bodyText');
+      expect(content).not.toContain('private page text');
+      expect(content).not.toContain('arbitraryAttribute');
+      expect(content).not.toContain('secret attribute');
+      expect(content).not.toContain('nestedAttribute');
+      expect(content).not.toContain('nested attribute');
+    }
+  });
+
+  it('rejects forbidden page content, form values and executable assets in every public format', () => {
+    const unsafe = {
+      ...blueprint,
+      innerText: 'private page text',
+      textContent: 'private page text',
+      formValue: 'secret input',
+      screenshot: 'data:image/png;base64,AAAA',
+      href: 'https://evil.example/tracker',
+      fullUrl: 'https://example.com/private?token=abc#fragment',
+    } as WebsiteBlueprint & Record<string, unknown>;
+
+    for (const { run } of serializers) {
+      expect(() => run(unsafe)).toThrow(TypeError);
+    }
+  });
+
+  it('keeps provenance to the origin where the format carries provenance', () => {
+    for (const { id, run } of serializers) {
+      const content = run(blueprint).content;
+      if (['blueprint-json', 'implementation-brief', 'component-inventory'].includes(id)) {
+        expect(content).toContain('https://example.com');
+      }
+      expect(content).not.toContain('/checkout');
+      expect(content).not.toContain('?token=');
+      expect(content).not.toContain('#fragment');
+      expect(content).not.toContain('<script');
+    }
+  });
 });
 
 describe('Design Tokens CSS export', () => {
@@ -208,6 +493,12 @@ describe('Design Tokens CSS export', () => {
     expect(result.warnings.join(' ')).toContain('Token names are inferred suggestions');
     expect(result.warnings.join(' ')).toContain('Unavailable design token data: Computed values were not readable');
     expect(result.warnings.join(' ')).toContain('Design token limitation: Custom properties were sampled');
+  });
+
+  it('rejects oversized output instead of silently truncating', () => {
+    const maxChars = serializeDesignTokensCss(blueprint).content.length - 1;
+    expect(maxChars).toBeGreaterThan(0);
+    expect(() => serializeDesignTokensCss(blueprint, { maxChars })).toThrow(RangeError);
   });
 });
 

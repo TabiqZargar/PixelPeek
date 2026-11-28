@@ -121,7 +121,7 @@ export function serializeDesignSystemCss(
 
   const kept: string[] = [];
   for (const declaration of declarations) {
-    const candidate = [...base.slice(0, 2), ...kept, declaration, closing];
+    const candidate = [rootOpen, ...kept, declaration, closing];
     if (candidate.join('\n').length > limit) break;
     kept.push(declaration);
   }
