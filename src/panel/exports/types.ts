@@ -8,7 +8,8 @@ export type ExportId =
   | 'implementation-brief'
   | 'design-tokens-css'
   | 'component-inventory'
-  | 'layout-specification';
+  | 'layout-specification'
+  | 'blueprint-agent-prompt';
 
 export type ExportMimeType = 'application/json' | 'text/css' | 'text/markdown';
 
@@ -54,6 +55,13 @@ export const EXPORT_FORMATS: Readonly<Record<ExportId, ExportFormatMetadata>> = 
     title: 'Layout Specification',
     label: 'Observed structure, geometry and layout values',
     filename: 'layout-specification.md',
+    mimeType: 'text/markdown',
+  },
+  'blueprint-agent-prompt': {
+    id: 'blueprint-agent-prompt',
+    title: 'Blueprint Agent Prompt',
+    label: 'Deterministic implementation prompt from validated observations',
+    filename: 'blueprint-agent-prompt.md',
     mimeType: 'text/markdown',
   },
 };
